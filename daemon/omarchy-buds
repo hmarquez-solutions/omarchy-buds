@@ -1,0 +1,968 @@
+#!/usr/bin/env python3
+"""omarchy-buds: Galaxy Buds daemon and control CLI for the Omarchy bar.
+
+One file, two jobs:
+
+  omarchy-buds daemon [--debug]   long-running: talks to the buds over Samsung's
+                                  SPP channel through BlueZ and publishes
+                                  $XDG_STATE_HOME/omarchy-buds/status.json
+  omarchy-buds <verb> [args]      one-shot: hands a command to the daemon over
+                                  its control socket and prints the reply
+
+The wire protocol is the one Samsung's own app speaks over RFCOMM. Everything
+known about it here comes from timschneeb's GalaxyBudsClient, which
+reverse-engineered it; see README.md for credits. Only python-gobject is
+needed, and Omarchy already ships it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import socket
+import sys
+import time
+import warnings
+
+# PyGObject renames these helpers every few releases; the old names still work.
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+VERSION = "0.1.0"
+SCHEMA_VERSION = 1
+
+# ---------------------------------------------------------------------------
+# Wire protocol
+# ---------------------------------------------------------------------------
+
+# Samsung's own SPP service, used by everything from the Buds2 onwards.
+UUID_SPP_NEW = "2e73a4ad-332d-41fc-90e2-16bef06523f2"
+# The generic Serial Port Profile, used by Buds+, Buds Live and Buds Pro.
+UUID_SPP_STANDARD = "00001101-0000-1000-8000-00805f9b34fb"
+
+SOM = 0xFD
+EOM = 0xDD
+
+
+class Msg:
+    """SPP message ids, named as Samsung's app names them."""
+
+    DEBUG_GET_ALL_DATA = 38
+    ACK = 66
+    STATUS_UPDATED = 96
+    EXTENDED_STATUS_UPDATED = 97
+    SET_ANC_WITH_ONE_EARBUD = 111
+    NOISE_CONTROLS_UPDATE = 119
+    NOISE_CONTROLS = 120
+    SET_DETECT_CONVERSATIONS = 122
+    AMBIENT_VOLUME = 132
+    EQUALIZER = 134
+    MANAGER_INFO = 136
+    LOCK_TOUCHPAD = 144
+    EXTRA_HIGH_AMBIENT = 150
+    FIND_MY_EARBUDS_START = 160
+    FIND_MY_EARBUDS_STOP = 161
+
+
+NOISE_MODES = {0: "off", 1: "anc", 2: "ambient", 3: "adaptive"}
+NOISE_MODE_IDS = {v: k for k, v in NOISE_MODES.items()}
+
+EQ_PRESETS = ["bass", "soft", "dynamic", "clear", "treble"]
+
+PLACEMENTS = {0: "disconnected", 1: "wearing", 2: "idle", 3: "case", 4: "case_closed"}
+
+
+def _crc_table() -> list[int]:
+    table = []
+    for i in range(256):
+        crc = i << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) if crc & 0x8000 else (crc << 1)
+        table.append(crc & 0xFFFF)
+    return table
+
+
+_CRC16 = _crc_table()
+
+
+def crc16(data: bytes) -> int:
+    """CRC-16/CCITT (poly 0x1021, init 0), as the buds compute it."""
+    crc = 0
+    for b in data:
+        crc = (_CRC16[((crc >> 8) ^ b) & 0xFF] ^ (crc << 8)) & 0xFFFF
+    return crc
+
+
+def encode(msg_id: int, payload: bytes = b"") -> bytes:
+    """Frame a request: SOM, little-endian length header, id, payload, CRC, EOM.
+
+    The length counts id + payload + CRC. Header bit 12 marks a response and
+    bit 13 a fragment; a request from us sets neither.
+    """
+    size = 1 + len(payload) + 2
+    crc = crc16(bytes([msg_id]) + payload)
+    return bytes([SOM]) + size.to_bytes(2, "little") + bytes([msg_id]) + payload + crc.to_bytes(2, "little") + bytes([EOM])
+
+
+class FrameParser:
+    """Reassembles frames from an RFCOMM byte stream."""
+
+    def __init__(self) -> None:
+        self.buf = bytearray()
+
+    def feed(self, data: bytes):
+        self.buf.extend(data)
+        while self.buf:
+            start = self.buf.find(SOM)
+            if start < 0:
+                self.buf.clear()
+                return
+            if start:
+                del self.buf[:start]
+            if len(self.buf) < 4:
+                return
+            header = int.from_bytes(self.buf[1:3], "little")
+            size = header & 0x3FF
+            total = 3 + size + 1
+            # Only bits 12 (response) and 13 (fragment) sit above the 10-bit size;
+            # anything else set means this SOM byte was payload, not a frame start.
+            if size < 3 or header & 0xCC00:
+                del self.buf[:1]
+                continue
+            if len(self.buf) < total:
+                return
+            frame = bytes(self.buf[:total])
+            # The CRC travels little-endian right after the payload.
+            if frame[-1] != EOM or crc16(frame[3:-3]) != int.from_bytes(frame[-3:-1], "little"):
+                # Not a frame after all; skip this SOM and resync on the next.
+                del self.buf[:1]
+                continue
+            del self.buf[:total]
+            yield frame[3], frame[4:-3], bool(header & 0x1000)
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+# Longest names first so "Buds3 Pro" wins over "Buds3" and "Buds3 FE" over "Buds FE".
+MODELS = [
+    # (name fragment, label, family, uuid, features)
+    ("Buds4 Pro", "Galaxy Buds4 Pro", "buds3", UUID_SPP_NEW, {"adaptive"}),
+    ("Buds3 Pro", "Galaxy Buds3 Pro", "buds3", UUID_SPP_NEW, {"adaptive"}),
+    ("Buds3 FE", "Galaxy Buds3 FE", "budsfe", UUID_SPP_NEW, set()),
+    ("Buds2 Pro", "Galaxy Buds2 Pro", "buds2pro", UUID_SPP_NEW, set()),
+    ("Buds Core", "Galaxy Buds Core", "budsfe", UUID_SPP_NEW, set()),
+    ("Buds Live", "Galaxy Buds Live", "legacy", UUID_SPP_STANDARD, set()),
+    ("Buds Pro", "Galaxy Buds Pro", "budspro", UUID_SPP_STANDARD, set()),
+    ("Buds FE", "Galaxy Buds FE", "budsfe", UUID_SPP_NEW, set()),
+    ("Buds4", "Galaxy Buds4", "buds3", UUID_SPP_NEW, set()),
+    ("Buds3", "Galaxy Buds3", "buds3", UUID_SPP_NEW, set()),
+    ("Buds2", "Galaxy Buds2", "buds2", UUID_SPP_NEW, set()),
+    ("Buds+", "Galaxy Buds+", "legacy", UUID_SPP_STANDARD, set()),
+]
+
+# What each payload family can be asked to do. The 2019 Galaxy Buds use a
+# different frame header entirely and are not supported.
+FAMILY_FEATURES = {
+    "buds3": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock", "call_touch_lock"},
+    "budsfe": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock", "call_touch_lock"},
+    "buds2pro": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock", "call_touch_lock"},
+    "buds2": {"noise_control", "ambient_volume", "one_bud_anc", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock"},
+    "budspro": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find"},
+    "legacy": {"touch_lock", "equalizer", "find"},
+    "generic": {"noise_control", "ambient_volume", "equalizer", "find"},
+}
+
+# Top ambient level per family (levels run from 0). The Buds3 generation moved
+# from three steps to five; a Buds4 Pro reports 4 with nothing else enabled.
+AMBIENT_VOLUME_MAX = {"budspro": 3, "buds3": 4}
+
+
+def identify(name: str):
+    for fragment, label, family, uuid, extra in MODELS:
+        if fragment in name:
+            return {"label": label, "family": family, "uuid": uuid, "features": FAMILY_FEATURES[family] | extra}
+    if "Buds" in name:
+        return {"label": "Galaxy Buds", "family": "generic", "uuid": UUID_SPP_NEW, "features": FAMILY_FEATURES["generic"]}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Device state
+# ---------------------------------------------------------------------------
+
+
+def _bud(level=None, placement="disconnected", charging=False):
+    return {"level": level, "placement": placement, "charging": charging}
+
+
+class BudsState:
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.connected = False
+        self.name = ""
+        self.address = ""
+        self.model = None
+        self.revision = 0
+        self.left = _bud()
+        self.right = _bud()
+        self.case = {"level": None, "charging": False}
+        self.noise_mode = None
+        self.ambient_volume = None
+        self.extra_high_ambient = False
+        self.one_bud_anc = None
+        self.conversation_detect = None
+        self.touch_locked = None
+        self.touch_flags = 0x0F  # single, double, triple, hold all on
+        self.eq_preset = None
+        self.finding = False
+
+    @property
+    def features(self) -> set:
+        return self.model["features"] if self.model else set()
+
+    def supports(self, feature: str) -> bool:
+        return feature in self.features
+
+    def wearing(self) -> bool:
+        return self.left["placement"] == "wearing" or self.right["placement"] == "wearing"
+
+    def available_noise_modes(self) -> list[str]:
+        if not self.supports("noise_control"):
+            return []
+        modes = ["off", "anc", "ambient"]
+        if self.supports("adaptive") or self.noise_mode == "adaptive":
+            modes.append("adaptive")
+        return modes
+
+    # -- decoding ---------------------------------------------------------
+
+    def _apply_placement(self, byte: int) -> None:
+        self.left["placement"] = PLACEMENTS.get(byte >> 4, "disconnected")
+        self.right["placement"] = PLACEMENTS.get(byte & 0x0F, "disconnected")
+
+    def _apply_charging(self, byte: int) -> None:
+        self.left["charging"] = bool(byte & 0x10)
+        self.right["charging"] = bool(byte & 0x04)
+        self.case["charging"] = bool(byte & 0x01)
+
+    @staticmethod
+    def _level(raw: int, placement: str):
+        if placement == "disconnected":
+            return None
+        return max(0, min(100, raw))
+
+    def _finish_levels(self, left_raw, right_raw, case_raw) -> None:
+        self.left["level"] = self._level(left_raw, self.left["placement"])
+        self.right["level"] = self._level(right_raw, self.right["placement"])
+        self.case["level"] = None if case_raw > 100 else case_raw
+
+    def apply_status(self, p: bytes) -> None:
+        """STATUS_UPDATED: the short battery/placement heartbeat."""
+        if len(p) < 7:
+            return
+        self._apply_placement(p[5])
+        if self.supports("charging_state") and len(p) > 7:
+            self._apply_charging(p[7])
+        self._finish_levels(p[1], p[2], p[6])
+
+    def apply_extended_status(self, p: bytes) -> None:
+        """EXTENDED_STATUS_UPDATED: everything, sent on connect and on change."""
+        if len(p) < 13:
+            return
+        self.revision = p[0]
+        self._apply_placement(p[6])
+        self._finish_levels(p[2], p[3], p[7])
+        self.eq_preset = "off" if p[9] == 0 else EQ_PRESETS[min(p[9] - 1, len(EQ_PRESETS) - 1)]
+
+        if self.supports("advanced_touch_lock"):
+            self.touch_flags = p[10] & 0x7F
+            self.touch_locked = not (p[10] & 0x80)
+        else:
+            self.touch_locked = p[10] == 1
+
+        family = self.model["family"] if self.model else "generic"
+        if family != "legacy":
+            self.noise_mode = NOISE_MODES.get(p[12])
+        if len(p) > 23 and self.supports("ambient_volume"):
+            self.ambient_volume = p[23]
+
+        if family == "budspro":
+            if len(p) > 26:
+                self.conversation_detect = p[26] == 1
+            if self.revision >= 8 and len(p) > 32:
+                self.one_bud_anc = p[32] == 1
+            if self.revision >= 6 and len(p) > 30:
+                self.extra_high_ambient = p[30] == 1
+        elif family == "buds2":
+            if len(p) > 26:
+                self.extra_high_ambient = p[26] == 1
+            if self.revision >= 3 and len(p) > 28:
+                self.one_bud_anc = p[28] == 1
+            if self.revision >= 10 and len(p) > 36:
+                self._apply_charging(p[36])
+        elif family in ("buds2pro", "budsfe", "buds3"):
+            if len(p) > 28:
+                self.conversation_detect = p[26] == 1
+                self.one_bud_anc = p[28] == 1
+            # From byte 34 the layout is a stream of single bytes; these offsets
+            # follow GalaxyBudsClient's decoder for each family.
+            if family == "buds2pro":
+                charging_at = 43 if self.revision >= 11 else None
+                extra_high_at = 45 if self.revision >= 13 else None
+            elif family == "budsfe":
+                charging_at, extra_high_at = 43, None
+            else:
+                charging_at, extra_high_at = 42, 44
+            if charging_at is not None and len(p) > charging_at:
+                self._apply_charging(p[charging_at])
+            if extra_high_at is not None and len(p) > extra_high_at:
+                self.extra_high_ambient = p[extra_high_at] == 1
+
+        # Charging always wins over "idle" for the placement label.
+        for bud in (self.left, self.right):
+            if bud["charging"] and bud["placement"] in ("idle", "disconnected"):
+                bud["placement"] = "case"
+
+    def apply_ack(self, p: bytes) -> None:
+        if len(p) < 2:
+            return
+        msg_id, value = p[0], p[1]
+        if msg_id == Msg.NOISE_CONTROLS:
+            # Older models echo the mode here; a Buds4 Pro answers 0 as a result
+            # code, which would read as Off. The buds announce real mode changes
+            # through NOISE_CONTROLS_UPDATE, so this ack is only a receipt.
+            return
+        if msg_id == Msg.AMBIENT_VOLUME:
+            self.ambient_volume = value
+        elif msg_id == Msg.SET_DETECT_CONVERSATIONS:
+            self.conversation_detect = value == 1
+        elif msg_id == Msg.SET_ANC_WITH_ONE_EARBUD:
+            self.one_bud_anc = value == 1
+        elif msg_id == Msg.EQUALIZER:
+            self.eq_preset = "off" if value == 0 else EQ_PRESETS[min(value - 1, len(EQ_PRESETS) - 1)]
+        elif msg_id == Msg.EXTRA_HIGH_AMBIENT:
+            self.extra_high_ambient = value == 1
+
+    # -- publishing -------------------------------------------------------
+
+    def to_json(self) -> dict:
+        model = self.model or {}
+        family = model.get("family", "")
+        ambient_max = AMBIENT_VOLUME_MAX.get(family, 2) + (1 if self.extra_high_ambient else 0)
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "daemon_version": VERSION,
+            "connected": self.connected,
+            "device": {
+                "name": self.name,
+                "address": self.address,
+                "model": model.get("label", ""),
+                "family": family,
+                "revision": self.revision,
+            },
+            "battery": {"left": dict(self.left), "right": dict(self.right), "case": dict(self.case)},
+            "noise": {
+                "mode": self.noise_mode,
+                "available": self.available_noise_modes(),
+                "ambient_volume": self.ambient_volume,
+                "ambient_volume_max": ambient_max,
+                "extra_high_ambient": self.extra_high_ambient,
+                "one_bud_anc": self.one_bud_anc,
+                "conversation_detect": self.conversation_detect,
+            },
+            "touch": {"locked": self.touch_locked},
+            "equalizer": {"preset": self.eq_preset, "presets": ["off"] + EQ_PRESETS},
+            "find": {"active": self.finding},
+            "supports": {f: True for f in sorted(self.features)},
+            "updated_at": int(time.time()),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Daemon
+# ---------------------------------------------------------------------------
+
+
+def state_dir() -> str:
+    return os.environ.get("STATE_DIRECTORY") or os.path.join(
+        os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state"), "omarchy-buds"
+    )
+
+
+def status_path() -> str:
+    return os.path.join(state_dir(), "status.json")
+
+
+def socket_path() -> str:
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return os.path.join(runtime, "omarchy-buds.sock")
+
+
+BLUEZ = "org.bluez"
+PROFILE_PATH = "/io/github/hmarquez_solutions/omarchy_buds/Profile"
+PROFILE_XML = """
+<node>
+  <interface name="org.bluez.Profile1">
+    <method name="Release"/>
+    <method name="NewConnection">
+      <arg type="o" name="device" direction="in"/>
+      <arg type="h" name="fd" direction="in"/>
+      <arg type="a{sv}" name="fd_properties" direction="in"/>
+    </method>
+    <method name="RequestDisconnection">
+      <arg type="o" name="device" direction="in"/>
+    </method>
+  </interface>
+</node>
+"""
+
+
+class Daemon:
+    def __init__(self, debug: bool = False) -> None:
+        import gi
+
+        gi.require_version("Gio", "2.0")
+        gi.require_version("GLib", "2.0")
+        from gi.repository import Gio, GLib
+
+        self.Gio, self.GLib = Gio, GLib
+        self.debug = debug
+        self.state = BudsState()
+        self.parser = FrameParser()
+        self.sock: socket.socket | None = None
+        self.sock_watch = 0
+        self.device_path: str | None = None
+        self.connect_attempts = 0
+        self.registered: set[str] = set()
+        self.loop = GLib.MainLoop()
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.control: socket.socket | None = None
+
+    # -- logging ----------------------------------------------------------
+
+    def log(self, msg: str) -> None:
+        print(msg, file=sys.stderr, flush=True)
+
+    def dbg(self, msg: str) -> None:
+        if self.debug:
+            self.log(msg)
+
+    # -- lifecycle --------------------------------------------------------
+
+    def run(self) -> int:
+        GLib = self.GLib
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        self.publish()
+        self.open_control_socket()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, self.quit)
+
+        node = self.Gio.DBusNodeInfo.new_for_xml(PROFILE_XML)
+        self.bus.register_object(PROFILE_PATH, node.interfaces[0], self.on_profile_call, None, None)
+
+        self.bus.signal_subscribe(BLUEZ, "org.freedesktop.DBus.Properties", "PropertiesChanged", None, "org.bluez.Device1",
+                                  self.Gio.DBusSignalFlags.NONE, self.on_properties_changed)
+        self.bus.signal_subscribe(BLUEZ, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded", "/", None,
+                                  self.Gio.DBusSignalFlags.NONE, self.on_interfaces_added)
+        self.bus.signal_subscribe("org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged", None, BLUEZ,
+                                  self.Gio.DBusSignalFlags.NONE, self.on_bluez_owner_changed)
+
+        self.setup_bluez()
+        self.loop.run()
+        return 0
+
+    def quit(self, *_args) -> bool:
+        self.log("omarchy-buds: stopping")
+        self.drop_link()
+        try:
+            os.unlink(status_path())
+        except OSError:
+            pass
+        try:
+            os.unlink(socket_path())
+        except OSError:
+            pass
+        self.loop.quit()
+        return False
+
+    # -- BlueZ ------------------------------------------------------------
+
+    def call(self, path: str, iface: str, method: str, params=None, reply_type: str | None = None):
+        GLib = self.GLib
+        return self.bus.call_sync(BLUEZ, path, iface, method, params,
+                                  GLib.VariantType(reply_type) if reply_type else None,
+                                  self.Gio.DBusCallFlags.NONE, 15000, None)
+
+    def setup_bluez(self) -> bool:
+        """Register our profiles and attach to any buds that are already connected.
+
+        Returns True to be re-run by a timer while BlueZ is unavailable.
+        """
+        GLib = self.GLib
+        try:
+            for uuid in (UUID_SPP_NEW, UUID_SPP_STANDARD):
+                if uuid in self.registered:
+                    continue
+                opts = {"Role": GLib.Variant("s", "client"), "Name": GLib.Variant("s", "omarchy-buds"),
+                        # Only Samsung's private UUID is safe to auto-connect; the generic
+                        # serial UUID is shared by unrelated gadgets.
+                        "AutoConnect": GLib.Variant("b", uuid == UUID_SPP_NEW)}
+                try:
+                    self.call("/org/bluez", "org.bluez.ProfileManager1", "RegisterProfile",
+                              GLib.Variant("(osa{sv})", (PROFILE_PATH, uuid, opts)))
+                except Exception as exc:  # noqa: BLE001
+                    if "AlreadyExists" not in str(exc):
+                        raise
+                self.registered.add(uuid)
+            self.log("omarchy-buds: profiles registered with BlueZ")
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"omarchy-buds: BlueZ not ready ({exc}); retrying in 10s")
+            GLib.timeout_add_seconds(10, self.setup_bluez)
+            return False
+
+        self.scan_devices()
+        return False
+
+    def scan_devices(self) -> None:
+        try:
+            managed = self.call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None, "(a{oa{sa{sv}}})")[0]
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"omarchy-buds: GetManagedObjects failed: {exc}")
+            return
+        for path, ifaces in managed.items():
+            dev = ifaces.get("org.bluez.Device1")
+            if dev and dev.get("Connected"):
+                self.consider_device(path, dev)
+
+    def consider_device(self, path: str, props: dict) -> None:
+        name = props.get("Alias") or props.get("Name") or ""
+        model = identify(name)
+        if not model:
+            return
+        if model["uuid"] not in (props.get("UUIDs") or []):
+            return
+        if self.sock and self.device_path == path:
+            return
+        if self.sock:
+            self.dbg(f"omarchy-buds: ignoring {name}; already linked to {self.state.name}")
+            return
+        self.device_path = path
+        self.state.name = name
+        self.state.address = props.get("Address", "")
+        self.state.model = model
+        self.connect_attempts = 0
+        self.log(f"omarchy-buds: {name} ({model['label']}) is connected; opening control link")
+        self.connect_profile()
+
+    def connect_profile(self) -> bool:
+        if not self.device_path or self.sock:
+            return False
+        uuid = self.state.model["uuid"]
+        try:
+            self.call(self.device_path, "org.bluez.Device1", "ConnectProfile", self.GLib.Variant("(s)", (uuid,)))
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc)
+            if "InProgress" in text or "AlreadyConnected" in text:
+                return False
+            self.connect_attempts += 1
+            if self.connect_attempts <= 10:
+                self.dbg(f"omarchy-buds: ConnectProfile failed ({text}); attempt {self.connect_attempts}/10")
+                self.GLib.timeout_add(1500, self.connect_profile)
+            else:
+                self.log(f"omarchy-buds: giving up on the control link: {text}")
+        return False
+
+    def on_properties_changed(self, _conn, _sender, path, _iface, _signal, params) -> None:
+        _iface_name, changed, _invalidated = params.unpack()
+        if "Connected" not in changed:
+            return
+        if changed["Connected"]:
+            try:
+                props = self.call(path, "org.freedesktop.DBus.Properties", "GetAll",
+                                  self.GLib.Variant("(s)", ("org.bluez.Device1",)), "(a{sv})")[0]
+            except Exception:  # noqa: BLE001
+                return
+            self.consider_device(path, props)
+        elif path == self.device_path:
+            self.log(f"omarchy-buds: {self.state.name} disconnected")
+            self.drop_link()
+            self.device_path = None
+            self.state.reset()
+            self.publish()
+
+    def on_interfaces_added(self, _conn, _sender, _path, _iface, _signal, params) -> None:
+        path, ifaces = params.unpack()
+        dev = ifaces.get("org.bluez.Device1")
+        if dev and dev.get("Connected"):
+            self.consider_device(path, dev)
+
+    def on_bluez_owner_changed(self, _conn, _sender, _path, _iface, _signal, params) -> None:
+        _name, _old, new = params.unpack()
+        self.registered.clear()
+        if new:
+            self.log("omarchy-buds: BlueZ appeared; registering")
+            self.GLib.timeout_add_seconds(2, self.setup_bluez)
+        else:
+            self.drop_link()
+            self.device_path = None
+            self.state.reset()
+            self.publish()
+
+    # -- Profile1 ---------------------------------------------------------
+
+    def on_profile_call(self, _conn, _sender, _path, _iface, method, params, invocation) -> None:
+        if method == "NewConnection":
+            device, fd_index, _props = params.unpack()
+            fd_list = invocation.get_message().get_unix_fd_list()
+            fd = fd_list.get(fd_index)
+            invocation.return_value(None)
+            self.on_new_connection(device, fd)
+        elif method == "RequestDisconnection":
+            invocation.return_value(None)
+            self.drop_link()
+            self.publish()
+        else:
+            invocation.return_value(None)
+
+    def on_new_connection(self, device: str, fd: int) -> None:
+        if self.sock:
+            self.log("omarchy-buds: second control link offered; keeping the first")
+            os.close(fd)
+            return
+        if device != self.device_path:
+            # BlueZ auto-connected a device we had not looked at yet; adopt it.
+            try:
+                props = self.call(device, "org.freedesktop.DBus.Properties", "GetAll",
+                                  self.GLib.Variant("(s)", ("org.bluez.Device1",)), "(a{sv})")[0]
+            except Exception:  # noqa: BLE001
+                props = {}
+            name = props.get("Alias") or props.get("Name") or device.rsplit("/", 1)[-1]
+            model = identify(name)
+            if not model:
+                self.log(f"omarchy-buds: link offered for unknown device {name}; declining")
+                os.close(fd)
+                return
+            self.device_path = device
+            self.state.name = name
+            self.state.address = props.get("Address", "")
+            self.state.model = model
+        self.sock = socket.socket(fileno=fd)
+        self.sock.setblocking(False)
+        self.parser = FrameParser()
+        self.sock_watch = self.GLib.io_add_watch(self.sock.fileno(), self.GLib.PRIORITY_DEFAULT,
+                                                 self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR, self.on_readable)
+        self.state.connected = True
+        self.log(f"omarchy-buds: control link up with {self.state.name}")
+        # Introduce ourselves the way the Samsung app does; the buds answer with
+        # an extended status.
+        self.send(Msg.MANAGER_INFO, bytes([1, 1, 34]))
+        self.publish()
+
+    def drop_link(self) -> None:
+        if self.sock_watch:
+            self.GLib.source_remove(self.sock_watch)
+            self.sock_watch = 0
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+        self.state.connected = False
+        self.state.finding = False
+
+    def on_readable(self, _fd, cond) -> bool:
+        if cond & (self.GLib.IO_HUP | self.GLib.IO_ERR):
+            self.log("omarchy-buds: control link closed")
+            self.drop_link()
+            self.publish()
+            return False
+        try:
+            data = self.sock.recv(4096)
+        except BlockingIOError:
+            return True
+        except OSError as exc:
+            self.log(f"omarchy-buds: read failed: {exc}")
+            self.drop_link()
+            self.publish()
+            return False
+        if not data:
+            self.log("omarchy-buds: control link closed by the buds")
+            self.drop_link()
+            self.publish()
+            return False
+        changed = False
+        for msg_id, payload, is_response in self.parser.feed(data):
+            self.dbg(f"<< id={msg_id} resp={int(is_response)} payload={payload.hex(' ')}")
+            changed |= self.handle(msg_id, payload)
+        if changed:
+            self.publish()
+        return True
+
+    def handle(self, msg_id: int, payload: bytes) -> bool:
+        s = self.state
+        if msg_id == Msg.STATUS_UPDATED:
+            s.apply_status(payload)
+        elif msg_id == Msg.EXTENDED_STATUS_UPDATED:
+            s.apply_extended_status(payload)
+        elif msg_id == Msg.NOISE_CONTROLS_UPDATE:
+            if payload:
+                s.noise_mode = NOISE_MODES.get(payload[0], s.noise_mode)
+        elif msg_id == Msg.AMBIENT_VOLUME:
+            if payload:
+                s.ambient_volume = payload[0]
+        elif msg_id == Msg.ACK:
+            s.apply_ack(payload)
+        elif msg_id in (Msg.FIND_MY_EARBUDS_STOP,):
+            s.finding = False
+        else:
+            return False
+        return True
+
+    def send(self, msg_id: int, payload: bytes = b"") -> None:
+        if not self.sock:
+            raise RuntimeError("buds are not connected")
+        frame = encode(msg_id, payload)
+        self.dbg(f">> id={msg_id} payload={payload.hex(' ')}")
+        self.sock.sendall(frame)
+
+    # -- status file ------------------------------------------------------
+
+    def publish(self) -> None:
+        path = status_path()
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.state.to_json(), fh, separators=(",", ":"))
+                fh.write("\n")
+            os.replace(tmp, path)
+        except OSError as exc:
+            self.log(f"omarchy-buds: cannot write {path}: {exc}")
+
+    # -- control socket ---------------------------------------------------
+
+    def open_control_socket(self) -> None:
+        path = socket_path()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        self.control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.control.bind(path)
+        os.chmod(path, 0o600)
+        self.control.listen(4)
+        self.control.setblocking(False)
+        self.GLib.io_add_watch(self.control.fileno(), self.GLib.PRIORITY_DEFAULT, self.GLib.IO_IN, self.on_control_readable)
+
+    def on_control_readable(self, _fd, _cond) -> bool:
+        try:
+            conn, _ = self.control.accept()
+        except OSError:
+            return True
+        try:
+            conn.settimeout(2)
+            line = b""
+            while not line.endswith(b"\n") and len(line) < 4096:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                line += chunk
+            reply = self.command(line.decode("utf-8", "replace").strip().split())
+            conn.sendall((json.dumps(reply) + "\n").encode())
+        except Exception as exc:  # noqa: BLE001
+            try:
+                conn.sendall((json.dumps({"ok": False, "error": str(exc)}) + "\n").encode())
+            except OSError:
+                pass
+        finally:
+            conn.close()
+        return True
+
+    def command(self, argv: list[str]) -> dict:
+        s = self.state
+        if not argv:
+            return {"ok": False, "error": "empty command"}
+        verb, args = argv[0], argv[1:]
+
+        if verb == "status":
+            return {"ok": True, "status": s.to_json()}
+        if verb == "refresh":
+            self.publish()
+            return {"ok": True}
+        if verb == "ping":
+            return {"ok": True, "version": VERSION}
+
+        if not s.connected:
+            return {"ok": False, "error": "buds are not connected"}
+
+        def need(feature: str) -> None:
+            if not s.supports(feature):
+                raise ValueError(f"{s.model['label']} does not support {feature.replace('_', ' ')}")
+
+        def flag(value: str) -> bool:
+            if value in ("on", "1", "true"):
+                return True
+            if value in ("off", "0", "false"):
+                return False
+            raise ValueError(f"expected on or off, got {value!r}")
+
+        try:
+            if verb == "noise":
+                need("noise_control")
+                mode = args[0] if args else ""
+                if mode == "cycle":
+                    modes = s.available_noise_modes()
+                    at = modes.index(s.noise_mode) if s.noise_mode in modes else -1
+                    mode = modes[(at + 1) % len(modes)]
+                if mode not in s.available_noise_modes():
+                    raise ValueError(f"mode must be one of {', '.join(s.available_noise_modes())}")
+                self.send(Msg.NOISE_CONTROLS, bytes([NOISE_MODE_IDS[mode]]))
+                s.noise_mode = mode
+            elif verb == "ambient-volume":
+                need("ambient_volume")
+                level = max(0, min(AMBIENT_VOLUME_MAX.get(s.model["family"], 2) + (1 if s.extra_high_ambient else 0), int(args[0])))
+                self.send(Msg.AMBIENT_VOLUME, bytes([level]))
+                s.ambient_volume = level
+            elif verb == "conversation":
+                need("conversation_detect")
+                on = flag(args[0])
+                self.send(Msg.SET_DETECT_CONVERSATIONS, bytes([int(on)]))
+                s.conversation_detect = on
+            elif verb == "onebud":
+                need("one_bud_anc")
+                on = flag(args[0])
+                self.send(Msg.SET_ANC_WITH_ONE_EARBUD, bytes([int(on)]))
+                s.one_bud_anc = on
+            elif verb == "touch-lock":
+                need("touch_lock")
+                lock = flag(args[0])
+                if s.supports("advanced_touch_lock"):
+                    f = s.touch_flags
+                    # [unlocked, single, double, triple, hold(, double-for-call, hold-for-call)]
+                    payload = [int(not lock), f >> 3 & 1, f >> 2 & 1, f >> 1 & 1, f & 1]
+                    if s.supports("call_touch_lock"):
+                        payload += [f >> 4 & 1, f >> 5 & 1]
+                    if lock:
+                        payload = [0] * len(payload)
+                    self.send(Msg.LOCK_TOUCHPAD, bytes(payload))
+                else:
+                    self.send(Msg.LOCK_TOUCHPAD, bytes([int(lock)]))
+                s.touch_locked = lock
+            elif verb == "eq":
+                need("equalizer")
+                preset = args[0] if args else ""
+                if preset == "cycle":
+                    presets = ["off"] + EQ_PRESETS
+                    at = presets.index(s.eq_preset) if s.eq_preset in presets else -1
+                    preset = presets[(at + 1) % len(presets)]
+                if preset == "off":
+                    self.send(Msg.EQUALIZER, bytes([0]))
+                elif preset in EQ_PRESETS:
+                    self.send(Msg.EQUALIZER, bytes([EQ_PRESETS.index(preset) + 1]))
+                else:
+                    raise ValueError(f"preset must be one of off, {', '.join(EQ_PRESETS)}")
+                s.eq_preset = preset
+            elif verb == "find":
+                need("find")
+                action = args[0] if args else "toggle"
+                if action == "toggle":
+                    action = "stop" if s.finding else "start"
+                if action == "start":
+                    if s.wearing():
+                        raise ValueError("take the buds out of your ears before ringing them")
+                    self.send(Msg.FIND_MY_EARBUDS_START)
+                    s.finding = True
+                elif action == "stop":
+                    self.send(Msg.FIND_MY_EARBUDS_STOP)
+                    s.finding = False
+                else:
+                    raise ValueError("expected start, stop or toggle")
+            else:
+                return {"ok": False, "error": f"unknown command {verb!r}"}
+        except (ValueError, IndexError) as exc:
+            return {"ok": False, "error": str(exc) or "missing argument"}
+        except (OSError, RuntimeError) as exc:
+            return {"ok": False, "error": f"send failed: {exc}"}
+
+        self.publish()
+        return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+USAGE = """\
+usage: omarchy-buds <command> [args]
+
+  daemon [--debug]             run the daemon (normally via omarchy-buds.service)
+  status                       print the current status JSON
+  noise off|anc|ambient|adaptive|cycle
+  ambient-volume <0-3>
+  conversation on|off          lower the volume when you start talking
+  onebud on|off                keep noise controls on with one bud in
+  touch-lock on|off
+  eq off|bass|soft|dynamic|clear|treble|cycle
+  find start|stop|toggle       ring the buds (refused while worn)
+  refresh                      rewrite the status file
+"""
+
+
+def cli(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    if argv[0] == "daemon":
+        parser = argparse.ArgumentParser(prog="omarchy-buds daemon")
+        parser.add_argument("--debug", action="store_true", help="log every frame")
+        opts = parser.parse_args(argv[1:])
+        return Daemon(debug=opts.debug).run()
+    if argv[0] == "--version":
+        print(VERSION)
+        return 0
+
+    if argv[0] == "status" and not os.path.exists(socket_path()):
+        try:
+            with open(status_path(), encoding="utf-8") as fh:
+                sys.stdout.write(fh.read())
+            return 0
+        except OSError:
+            print("omarchy-buds: daemon is not running", file=sys.stderr)
+            return 1
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(5)
+            sock.connect(socket_path())
+            sock.sendall((" ".join(argv) + "\n").encode())
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+    except OSError as exc:
+        print(f"omarchy-buds: daemon is not running ({exc})", file=sys.stderr)
+        return 1
+
+    try:
+        reply = json.loads(data.decode() or "{}")
+    except json.JSONDecodeError:
+        print("omarchy-buds: garbled reply from the daemon", file=sys.stderr)
+        return 1
+    if not reply.get("ok"):
+        print(f"omarchy-buds: {reply.get('error', 'command failed')}", file=sys.stderr)
+        return 1
+    if "status" in reply:
+        json.dump(reply["status"], sys.stdout, indent=2)
+        print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(cli(sys.argv[1:]))

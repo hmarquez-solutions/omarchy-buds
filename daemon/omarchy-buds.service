@@ -1,0 +1,40 @@
+[Unit]
+Description=omarchy-buds Galaxy Buds daemon
+# The control link needs BlueZ on the system bus, which arrives with the graphical session.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omarchy-buds daemon
+Restart=on-failure
+RestartSec=5
+
+# The status file names the paired device, so nothing the daemon creates is world-readable.
+UMask=0077
+StateDirectory=omarchy-buds
+StateDirectoryMode=0700
+ProtectSystem=strict
+# strict leaves /home and /run/user to ProtectHome, so home needs this line;
+# the script itself lives under ~/.local/bin and is only ever read.
+ProtectHome=read-only
+# ProtectHome takes /run/user too, and the control socket has to live there.
+ReadWritePaths=%t
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# The RFCOMM socket arrives from BlueZ over D-Bus; everything else is a local socket.
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH
+
+[Install]
+WantedBy=graphical-session.target

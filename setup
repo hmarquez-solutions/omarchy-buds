@@ -1,0 +1,27 @@
+#!/bin/bash
+# omarchy plugin add only clones files, so this is the rest of the install:
+# the daemon into ~/.local/bin and its user service.
+
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")" && pwd)
+bin="$HOME/.local/bin"
+units="$HOME/.config/systemd/user"
+
+# Omarchy ships python-gobject in its base install; this only matters on a trimmed system.
+if ! python3 -c 'import gi' 2>/dev/null; then
+  omarchy pkg add python-gobject
+fi
+
+mkdir -p "$bin" "$units"
+install -m 0755 "$root/daemon/omarchy-buds" "$bin/omarchy-buds"
+install -m 0644 "$root/daemon/omarchy-buds.service" "$units/omarchy-buds.service"
+
+systemctl --user daemon-reload
+systemctl --user enable omarchy-buds.service
+# enable --now would leave an already-running daemon on the old script after an update.
+systemctl --user restart omarchy-buds.service
+
+echo "omarchy-buds is running."
+echo "The bar icon stays hidden until Galaxy Buds are connected."
+echo "Keep it visible: omarchy bar set io.github.hmarquez-solutions.buds hideWhenDisconnected false --json"
