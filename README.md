@@ -237,17 +237,13 @@ python3 -m unittest discover -s tests
 
 ## Credits
 
-The hard part is not this panel. It is
-[GalaxyBudsClient](https://github.com/timschneeb/GalaxyBudsClient) by
-**Tim Schneeberger**, which reverse-engineered Samsung's SPP protocol: the frame
-format, the message ids and the byte-by-byte status layouts for every model. The
-daemon here is an independent Python implementation of that protocol; it copies
-no code and is a fraction of the scope. If you want firmware updates, the fit
-test or the hidden debug pages, install GalaxyBudsClient.
+The SPP protocol was reverse-engineered by Tim Schneeberger in
+[GalaxyBudsClient](https://github.com/timschneeb/GalaxyBudsClient). This daemon
+is a separate implementation of that protocol. Firmware updates, the fit test
+and the debug pages live in GalaxyBudsClient, not here.
 
-Thanks to [omarchy-pods](https://github.com/thisisgm/omarchy-pods) by **GM**,
-the AirPods plugin whose panel it was helpful to look at when working out how a
-device panel sits in the Omarchy bar.
+The bar panel is modelled on [omarchy-pods](https://github.com/thisisgm/omarchy-pods)
+by GM.
 
 Galaxy Buds is a trademark of Samsung Electronics, which does not sponsor or
 endorse this plugin.
