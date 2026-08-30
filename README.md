@@ -55,9 +55,24 @@ request.
   If your model *does* push updates on a pinch (several older ones do), they are
   handled and the panel keeps up. Reports with a `--debug` frame log from a
   model that pushes are welcome.
-- **Volume swiped on the buds does not raise Omarchy's volume OSD.** That OSD
-  belongs to the stock Audio widget and follows the PipeWire sink volume; the
-  buds' own volume gesture is a separate control this plugin does not touch.
+
+## Volume OSD
+
+A swipe on the buds moves the PipeWire sink volume directly, but the stock shell
+only raises its volume OSD when it changes the volume itself, so nothing pops on
+a swipe. The optional `omarchy-buds-osd` companion closes that gap: it watches
+the default sink and shows the same OSD, with the same icons the volume keys
+use, whenever the volume changes from outside the shell — the buds included.
+
+`setup` installs and enables it. It is a small shell script, separate from the
+plugin and the buds daemon, and genuinely general: any external volume change
+raises the OSD, not only the buds. To install without it, or to turn it off:
+
+```bash
+OMARCHY_BUDS_OSD=0 ~/.config/omarchy/plugins/io.github.hmarquez-solutions.buds/setup
+# or, later:
+systemctl --user disable --now omarchy-buds-osd.service
+```
 
 ## Deliberately absent
 
@@ -140,8 +155,9 @@ Update with `omarchy plugin update io.github.hmarquez-solutions.buds` and run
 ## Remove
 
 ```bash
-systemctl --user disable --now omarchy-buds.service
-rm -f ~/.local/bin/omarchy-buds ~/.config/systemd/user/omarchy-buds.service
+systemctl --user disable --now omarchy-buds.service omarchy-buds-osd.service
+rm -f ~/.local/bin/omarchy-buds ~/.local/bin/omarchy-buds-osd
+rm -f ~/.config/systemd/user/omarchy-buds.service ~/.config/systemd/user/omarchy-buds-osd.service
 rm -rf ~/.local/state/omarchy-buds
 omarchy plugin remove io.github.hmarquez-solutions.buds
 ```

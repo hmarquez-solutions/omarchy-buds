@@ -1,0 +1,16 @@
+[Unit]
+Description=omarchy-buds volume OSD watcher
+# Needs the graphical session for omarchy-shell (the OSD) and the audio server.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omarchy-buds-osd
+# always, not on-failure: `pactl subscribe` exits 0 when the audio server
+# restarts, and the watcher must come back with it.
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

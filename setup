@@ -17,11 +17,27 @@ mkdir -p "$bin" "$units"
 install -m 0755 "$root/daemon/omarchy-buds" "$bin/omarchy-buds"
 install -m 0644 "$root/daemon/omarchy-buds.service" "$units/omarchy-buds.service"
 
+# The volume-OSD watcher is a companion, not the plugin: it shows Omarchy's
+# volume OSD when the volume changes from outside the shell, such as a swipe on
+# the buds. Installed always; enabled unless OMARCHY_BUDS_OSD=0.
+install -m 0755 "$root/daemon/omarchy-buds-osd" "$bin/omarchy-buds-osd"
+install -m 0644 "$root/daemon/omarchy-buds-osd.service" "$units/omarchy-buds-osd.service"
+
 systemctl --user daemon-reload
 systemctl --user enable omarchy-buds.service
 # enable --now would leave an already-running daemon on the old script after an update.
 systemctl --user restart omarchy-buds.service
 
+if [[ "${OMARCHY_BUDS_OSD:-1}" != "0" ]]; then
+  systemctl --user enable omarchy-buds-osd.service
+  systemctl --user restart omarchy-buds-osd.service
+  osd_state="on (volume swipes on the buds now raise the OSD)"
+else
+  systemctl --user disable --now omarchy-buds-osd.service 2>/dev/null || true
+  osd_state="off (re-run without OMARCHY_BUDS_OSD=0 to enable)"
+fi
+
 echo "omarchy-buds is running."
+echo "Volume OSD watcher: $osd_state"
 echo "The bar icon stays hidden until Galaxy Buds are connected."
 echo "Keep it visible: omarchy bar set io.github.hmarquez-solutions.buds hideWhenDisconnected false --json"

@@ -1,0 +1,64 @@
+#!/bin/bash
+# omarchy-buds-osd: show Omarchy's volume OSD when the volume changes from
+# outside the shell — the case the stock shell does not cover, which is what a
+# volume swipe on the Galaxy Buds is.
+#
+# The shell only raises the volume OSD when it changes the volume itself (the
+# volume keys, the audio panel). A swipe on the buds moves the PipeWire sink
+# volume directly, so nothing pops the OSD. This watches PulseAudio/PipeWire for
+# sink volume changes and shows the same OSD, using the same icon keywords the
+# volume keys use so it looks identical.
+#
+# Deduped by (sink, volume, muted): the ~3 change events PulseAudio emits per
+# step, and the sink events that fire during playback, collapse to one OSD per
+# distinct level. When a hardware volume key changes the volume, the shell shows
+# the OSD and this shows it again with the same value — the same surface, one
+# visible OSD.
+
+set -uo pipefail
+
+last=""
+
+emit() {
+  local silent="${1:-0}"
+  local sink pct muted icon key volline
+  sink="$(pactl get-default-sink 2>/dev/null)" || return 0
+  [[ -n $sink ]] || return 0
+  volline="$(pactl get-sink-volume "$sink" 2>/dev/null | head -1)" || return 0
+  pct="$(grep -oE '[0-9]+%' <<<"$volline" | head -1 | tr -d '%')"
+  [[ -n $pct ]] || return 0
+  if [[ "$(pactl get-sink-mute "$sink" 2>/dev/null)" == *yes ]]; then muted=1; else muted=0; fi
+
+  key="$sink:$pct:$muted"
+  [[ $key == "$last" ]] && return 0
+  last="$key"
+
+  # Don't pop an OSD just because the watcher started or the default sink
+  # changed device; only real level changes should show.
+  (( silent )) && return 0
+
+  if (( muted )) || (( pct == 0 )); then
+    icon="volume-muted"
+  elif (( pct < 34 )); then
+    icon="volume-low"
+  elif (( pct < 67 )); then
+    icon="volume-medium"
+  else
+    icon="volume-high"
+  fi
+  omarchy-osd -i "$icon" -p "$pct" || true
+}
+
+command -v pactl >/dev/null 2>&1 || { echo "omarchy-buds-osd: pactl not found" >&2; exit 1; }
+command -v omarchy-osd >/dev/null 2>&1 || { echo "omarchy-buds-osd: omarchy-osd not found" >&2; exit 1; }
+
+# Prime the baseline so startup does not flash an OSD.
+emit 1
+
+# `pactl subscribe` prints a line per event; react to sink events only. If the
+# daemon restarts, subscribe exits and systemd restarts the unit.
+pactl subscribe 2>/dev/null | while read -r line; do
+  case "$line" in
+    *"on sink #"*) emit ;;
+  esac
+done
