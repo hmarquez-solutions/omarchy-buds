@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="docs/bar.png" alt="The Galaxy Buds icon in the Omarchy bar, next to the clock and weather" width="478">
-  <br><sub>The bar mark, drawn with QtQuick Shapes so it does not depend on the theme font.</sub>
+  <br><sub>The bar mark is drawn, so it does not depend on what the theme font happens to carry.</sub>
 </p>
 
 ## What it shows
@@ -32,7 +32,7 @@
 
 | | |
 |:---:|:---:|
-| <img src="docs/panel.png" alt="Galaxy Buds4 Pro panel" width="360"> | **Galaxy Buds4 Pro, both buds in ear**<br>Ambient Sound active with its volume slider, the three toggles, equalizer and find-my-buds below. The case is at 3% because it really was. |
+| <img src="docs/panel.png" alt="Galaxy Buds4 Pro panel" width="360"> | **Galaxy Buds4 Pro, both buds in ear**<br>Ambient Sound selected, with the ambient-volume slider, the three toggles, and the equalizer and find-my-buds rows below. |
 
 The panel is built from the capability keys the daemon publishes, so a model
 without voice detect gets no Voice detect row, and a model that never reports
@@ -152,6 +152,20 @@ omarchy bar set io.github.hmarquez-solutions.buds hideWhenDisconnected false --j
 Update with `omarchy plugin update io.github.hmarquez-solutions.buds` and run
 `setup` again so the installed daemon matches.
 
+## What this installs
+
+`setup` is the only extra step after `omarchy plugin add`. It puts:
+
+- the daemon at `~/.local/bin/omarchy-buds`, and a user unit
+  `omarchy-buds.service` (enabled and started)
+- the volume-OSD watcher at `~/.local/bin/omarchy-buds-osd` and
+  `omarchy-buds-osd.service` (enabled unless you set `OMARCHY_BUDS_OSD=0`)
+- `python-gobject`, via `omarchy pkg add`, only if it is missing — Omarchy
+  already ships it
+
+Nothing else. No system-wide units, and no extra packages on a stock Omarchy
+install.
+
 ## Remove
 
 ```bash
@@ -231,9 +245,9 @@ daemon here is an independent Python implementation of that protocol; it copies
 no code and is a fraction of the scope. If you want firmware updates, the fit
 test or the hidden debug pages, install GalaxyBudsClient.
 
-The panel's shape, state handling and this README follow
-[omarchy-pods](https://github.com/thisisgm/omarchy-pods) by **GM**, the AirPods
-plugin for Omarchy. Good artists borrow.
+Thanks to [omarchy-pods](https://github.com/thisisgm/omarchy-pods) by **GM**,
+the AirPods plugin whose panel it was helpful to look at when working out how a
+device panel sits in the Omarchy bar.
 
 Galaxy Buds is a trademark of Samsung Electronics, which does not sponsor or
 endorse this plugin.

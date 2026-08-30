@@ -2,9 +2,10 @@ import QtQuick
 import QtQuick.Shapes
 import qs.Commons
 
-// A pair of blade-style earbuds, drawn rather than typed: the Nerd Font's
-// earbud glyphs render as fallback junk on Omarchy, and a drawn mark cannot
-// depend on what the active theme's font happens to carry.
+// Galaxy Buds4 Pro, traced down to the features which survive at bar size: the
+// broad offset ear body and tip, the straight blade and its circular grille.
+// The grille is knocked out of the silhouette instead of drawn in a second
+// colour, so the mark works on every Omarchy theme.
 Item {
   id: root
 
@@ -14,38 +15,41 @@ Item {
   implicitWidth: iconSize
   implicitHeight: iconSize
 
-  // Artboard is 40 x 32; the ink fills it, so fitting is a straight scale.
-  readonly property real artW: 40
-  readonly property real artH: 32
-  readonly property real fit: iconSize / Math.max(artW, artH)
+  readonly property real artWidth: 40
+  readonly property real artHeight: 32
+  readonly property real fit: iconSize / Math.max(artWidth, artHeight)
 
   Shape {
-    width: root.artW
-    height: root.artH
-    transform: [
-      Scale { xScale: root.fit; yScale: root.fit },
-      Translate {
-        x: (root.iconSize - root.artW * root.fit) / 2
-        y: (root.iconSize - root.artH * root.fit) / 2
-      }
-    ]
+    width: root.artWidth
+    height: root.artHeight
+    scale: root.fit
+    transformOrigin: Item.TopLeft
+    x: (root.iconSize - root.artWidth * root.fit) / 2
+    y: (root.iconSize - root.artHeight * root.fit) / 2
     preferredRendererType: Shape.CurveRenderer
+
     layer.enabled: true
     layer.smooth: true
-    layer.textureSize: Qt.size(width * root.fit * 3, height * root.fit * 3)
+    layer.textureSize: Qt.size(root.iconSize * 3, root.iconSize * 3)
 
-    // Left bud: round head at the top, blade tapering down and slightly inwards.
+    // The outer lobes are the silicone tips seen behind each housing. Compared
+    // with the old icon, the blades are shorter and the bodies much wider.
     ShapePath {
       fillColor: root.color
       strokeWidth: -1
-      PathSvg { path: "M 10 1 C 15 1 19 4.8 19 9.5 C 19 12.6 17.3 15 14.9 16.4 L 13.6 28.5 C 13.4 30.2 12 31.4 10.3 31.4 C 8.6 31.4 7.2 30.2 7 28.5 L 5.7 16.4 C 3 15 1 12.6 1 9.5 C 1 4.8 5 1 10 1 Z" }
+      fillRule: ShapePath.OddEvenFill
+      PathSvg {
+        path: "M 12.3 1.2 C 16.5 1.2 19.2 4.1 19.2 8.1 C 19.2 11.8 16.8 14.6 13.9 15.8 L 13.9 27.1 C 13.9 29.7 12.4 31.1 10.3 31.1 C 8.2 31.1 6.8 29.6 6.8 27.1 L 6.8 16.4 C 4.2 17.4 1.7 15.8 0.8 13.2 C -0.1 10.6 1.1 7.9 3.5 6.6 C 4.8 3.3 8.1 1.2 12.3 1.2 Z M 10.3 4.0 A 2.3 2.3 0 1 0 10.3 8.6 A 2.3 2.3 0 1 0 10.3 4.0 Z"
+      }
     }
 
-    // Right bud, the mirror of the left.
     ShapePath {
       fillColor: root.color
       strokeWidth: -1
-      PathSvg { path: "M 30 1 C 25 1 21 4.8 21 9.5 C 21 12.6 22.7 15 25.1 16.4 L 26.4 28.5 C 26.6 30.2 28 31.4 29.7 31.4 C 31.4 31.4 32.8 30.2 33 28.5 L 34.3 16.4 C 37 15 39 12.6 39 9.5 C 39 4.8 35 1 30 1 Z" }
+      fillRule: ShapePath.OddEvenFill
+      PathSvg {
+        path: "M 27.7 1.2 C 23.5 1.2 20.8 4.1 20.8 8.1 C 20.8 11.8 23.2 14.6 26.1 15.8 L 26.1 27.1 C 26.1 29.7 27.6 31.1 29.7 31.1 C 31.8 31.1 33.2 29.6 33.2 27.1 L 33.2 16.4 C 35.8 17.4 38.3 15.8 39.2 13.2 C 40.1 10.6 38.9 7.9 36.5 6.6 C 35.2 3.3 31.9 1.2 27.7 1.2 Z M 29.7 4.0 A 2.3 2.3 0 1 0 29.7 8.6 A 2.3 2.3 0 1 0 29.7 4.0 Z"
+      }
     }
   }
 }
