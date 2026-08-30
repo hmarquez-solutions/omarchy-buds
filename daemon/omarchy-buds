@@ -49,6 +49,7 @@ class Msg:
     """SPP message ids, named as Samsung's app names them."""
 
     DEBUG_GET_ALL_DATA = 38
+    TOUCH_ON_BUDS = 45
     ACK = 66
     STATUS_UPDATED = 96
     EXTENDED_STATUS_UPDATED = 97
@@ -94,15 +95,17 @@ def crc16(data: bytes) -> int:
     return crc
 
 
-def encode(msg_id: int, payload: bytes = b"") -> bytes:
-    """Frame a request: SOM, little-endian length header, id, payload, CRC, EOM.
+def encode(msg_id: int, payload: bytes = b"", flags: int = 0) -> bytes:
+    """Frame a message: SOM, little-endian length header, id, payload, CRC, EOM.
 
-    The length counts id + payload + CRC. Header bit 12 marks a response and
-    bit 13 a fragment; a request from us sets neither.
+    The length counts id + payload + CRC and lives in the low 10 header bits;
+    bits 12 and 13 are type flags (see Samsung's own client for their meaning),
+    passed through `flags` as a 16-bit mask.
     """
     size = 1 + len(payload) + 2
     crc = crc16(bytes([msg_id]) + payload)
-    return bytes([SOM]) + size.to_bytes(2, "little") + bytes([msg_id]) + payload + crc.to_bytes(2, "little") + bytes([EOM])
+    header = (size & 0x3FF) | (flags & 0x3000)
+    return bytes([SOM]) + header.to_bytes(2, "little") + bytes([msg_id]) + payload + crc.to_bytes(2, "little") + bytes([EOM])
 
 
 class FrameParser:
@@ -560,21 +563,31 @@ class Daemon:
         self.connect_profile()
 
     def connect_profile(self) -> bool:
+        """Ask BlueZ to open the SPP profile. Asynchronous: BlueZ can take many
+        seconds to answer and the main loop must keep serving reads meanwhile."""
         if not self.device_path or self.sock:
             return False
         uuid = self.state.model["uuid"]
-        try:
-            self.call(self.device_path, "org.bluez.Device1", "ConnectProfile", self.GLib.Variant("(s)", (uuid,)))
-        except Exception as exc:  # noqa: BLE001
-            text = str(exc)
-            if "InProgress" in text or "AlreadyConnected" in text:
-                return False
-            self.connect_attempts += 1
-            if self.connect_attempts <= 10:
-                self.dbg(f"omarchy-buds: ConnectProfile failed ({text}); attempt {self.connect_attempts}/10")
-                self.GLib.timeout_add(1500, self.connect_profile)
-            else:
-                self.log(f"omarchy-buds: giving up on the control link: {text}")
+        device_path = self.device_path
+
+        def done(bus, result):
+            try:
+                bus.call_finish(result)
+            except Exception as exc:  # noqa: BLE001
+                text = str(exc)
+                if device_path != self.device_path or self.sock:
+                    return
+                if "InProgress" in text or "AlreadyConnected" in text:
+                    return
+                self.connect_attempts += 1
+                if self.connect_attempts <= 10:
+                    self.dbg(f"omarchy-buds: ConnectProfile failed ({text}); attempt {self.connect_attempts}/10")
+                    self.GLib.timeout_add(1500, self.connect_profile)
+                else:
+                    self.log(f"omarchy-buds: giving up on the control link: {text}")
+
+        self.bus.call(BLUEZ, device_path, "org.bluez.Device1", "ConnectProfile", self.GLib.Variant("(s)", (uuid,)),
+                      None, self.Gio.DBusCallFlags.NONE, 30000, None, done)
         return False
 
     def on_properties_changed(self, _conn, _sender, path, _iface, _signal, params) -> None:
@@ -720,15 +733,48 @@ class Daemon:
             s.apply_ack(payload)
         elif msg_id in (Msg.FIND_MY_EARBUDS_STOP,):
             s.finding = False
+        elif msg_id == Msg.TOUCH_ON_BUDS:
+            # A gesture happened on a bud. Some models push a NOISE_CONTROLS_UPDATE
+            # (id 119) of their own after one; those are handled above. The Buds4
+            # Pro send neither that nor this on a pinch, so re-sending the
+            # handshake here is a harmless best effort for the models that do
+            # answer it with a fresh status. See "Known limitations" in README.
+            self.request_status()
+            return False
         else:
             return False
         return True
 
-    def send(self, msg_id: int, payload: bytes = b"") -> None:
+    # -- status refresh ---------------------------------------------------
+    #
+    # Nothing in the protocol asks for a status: the buds send one when the
+    # control link opens and after some changes. Re-sending MANAGER_INFO is the
+    # one nudge that is safe to repeat on a live link; if a given model answers
+    # it with a fresh EXTENDED_STATUS_UPDATED, a gesture-driven change shows up.
+    # Tearing the link down to force one is deliberately not done: it drops the
+    # audio profile and BlueZ will not always bring it back.
+
+    _status_poll = 0
+
+    def request_status(self, delay_ms: int = 350) -> None:
+        if self._status_poll:
+            self.GLib.source_remove(self._status_poll)
+        self._status_poll = self.GLib.timeout_add(delay_ms, self._poll_now)
+
+    def _poll_now(self) -> bool:
+        self._status_poll = 0
+        if self.sock:
+            try:
+                self.send(Msg.MANAGER_INFO, bytes([1, 1, 34]))
+            except OSError as exc:
+                self.log(f"omarchy-buds: status poll failed: {exc}")
+        return False
+
+    def send(self, msg_id: int, payload: bytes = b"", flags: int = 0) -> None:
         if not self.sock:
             raise RuntimeError("buds are not connected")
-        frame = encode(msg_id, payload)
-        self.dbg(f">> id={msg_id} payload={payload.hex(' ')}")
+        frame = encode(msg_id, payload, flags)
+        self.dbg(f">> id={msg_id} flags={flags:#x} payload={payload.hex(' ')}")
         self.sock.sendall(frame)
 
     # -- status file ------------------------------------------------------
@@ -792,10 +838,25 @@ class Daemon:
         if verb == "status":
             return {"ok": True, "status": s.to_json()}
         if verb == "refresh":
+            if s.connected:
+                self.request_status(0)
             self.publish()
             return {"ok": True}
         if verb == "ping":
             return {"ok": True, "version": VERSION}
+        if verb == "raw":
+            # Debug aid: send an arbitrary message id with an optional hex payload
+            # and watch the reply with `daemon --debug`.
+            if not s.connected:
+                return {"ok": False, "error": "buds are not connected"}
+            try:
+                payload = bytes.fromhex(args[1]) if len(args) > 1 and args[1] != "-" else b""
+                self.send(int(args[0]), payload, int(args[2], 0) if len(args) > 2 else 0)
+            except (ValueError, IndexError) as exc:
+                return {"ok": False, "error": f"usage: raw <id> [hexpayload] [flags] ({exc})"}
+            except OSError as exc:
+                return {"ok": False, "error": f"send failed: {exc}"}
+            return {"ok": True}
 
         if not s.connected:
             return {"ok": False, "error": "buds are not connected"}

@@ -39,6 +39,26 @@ without voice detect gets no Voice detect row, and a model that never reports
 Adaptive never draws it. Screenshots of other models are welcome in a pull
 request.
 
+## Known limitations
+
+- **Changing the noise mode on the buds does not update the panel live, on the
+  Buds4 Pro.** Panel → buds works and is acknowledged; buds → panel does not.
+  When you pinch-and-hold to cycle the mode, this firmware sends no
+  notification over the control link — no `NOISE_CONTROLS_UPDATE`, no fresh
+  extended status, and no gesture frame either; the only unsolicited traffic is
+  the head-tracking sensor stream. There is also no request that reads the
+  current mode back, so the panel cannot poll for it, and the one thing that
+  would force a fresh status — dropping and reopening the link — takes the audio
+  profile down with it, which is not a trade worth making for a status refresh.
+  The panel corrects itself on the next reconnect. GalaxyBudsClient marks the
+  Buds4 Pro extended status as "not properly implemented" for the same reason.
+  If your model *does* push updates on a pinch (several older ones do), they are
+  handled and the panel keeps up. Reports with a `--debug` frame log from a
+  model that pushes are welcome.
+- **Volume swiped on the buds does not raise Omarchy's volume OSD.** That OSD
+  belongs to the stock Audio widget and follows the PipeWire sink volume; the
+  buds' own volume gesture is a separate control this plugin does not touch.
+
 ## Deliberately absent
 
 - **Volume and output device** live in the stock Audio panel, which already
