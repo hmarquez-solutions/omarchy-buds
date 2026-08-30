@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="docs/bar.png" alt="The Galaxy Buds icon in the Omarchy bar, next to the clock and weather" width="478">
-  <br><sub>The bar mark is drawn, so it does not depend on what the theme font happens to carry.</sub>
+  <br><sub>The bar mark is a cut-out of the Buds4 Pro.</sub>
 </p>
 
 ## What it shows
