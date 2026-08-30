@@ -6,7 +6,12 @@
 </p>
 
 <p align="center">
-  <img src="docs/panel.png" alt="The Galaxy Buds panel open in the Omarchy bar" width="420">
+  <img src="docs/panel.png" alt="The Galaxy Buds panel open in the Omarchy bar" width="460">
+</p>
+
+<p align="center">
+  <img src="docs/bar.png" alt="The Galaxy Buds icon in the Omarchy bar, next to the clock and weather" width="478">
+  <br><sub>The bar mark, drawn with QtQuick Shapes so it does not depend on the theme font.</sub>
 </p>
 
 ## What it shows
@@ -22,6 +27,17 @@
   controls** and **touch lock**, each gated on what the model supports.
 - **Equalizer** preset and **Find my buds**, which rings them, and refuses to
   while they are in your ears.
+
+## Screenshots
+
+| | |
+|:---:|:---:|
+| <img src="docs/panel.png" alt="Galaxy Buds4 Pro panel" width="360"> | **Galaxy Buds4 Pro, both buds in ear**<br>Ambient Sound active with its volume slider, the three toggles, equalizer and find-my-buds below. The case is at 3% because it really was. |
+
+The panel is built from the capability keys the daemon publishes, so a model
+without voice detect gets no Voice detect row, and a model that never reports
+Adaptive never draws it. Screenshots of other models are welcome in a pull
+request.
 
 ## Deliberately absent
 
