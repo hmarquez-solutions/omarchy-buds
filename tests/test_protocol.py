@@ -5,7 +5,9 @@ Run with:  python3 -m unittest discover -s tests
 
 import importlib.util
 import os
+import socket
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +91,97 @@ class IdentifyTests(unittest.TestCase):
     def test_unknown_buds_fall_back_to_generic(self):
         self.assertEqual(ob.identify("Galaxy Buds9 Ultra")["family"], "generic")
         self.assertIsNone(ob.identify("Sony WH-1000XM5"))
+
+
+class BoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.old_state = os.environ.get("XDG_STATE_HOME")
+        self.old_runtime = os.environ.get("XDG_RUNTIME_DIR")
+        self.temp = tempfile.TemporaryDirectory()
+        os.environ["XDG_STATE_HOME"] = os.path.join(self.temp.name, "state")
+        os.environ["XDG_RUNTIME_DIR"] = os.path.join(self.temp.name, "runtime")
+        self.daemon = object.__new__(ob.Daemon)
+        self.daemon.state = ob.BudsState()
+
+    def tearDown(self):
+        if self.old_state is None:
+            os.environ.pop("XDG_STATE_HOME", None)
+        else:
+            os.environ["XDG_STATE_HOME"] = self.old_state
+        if self.old_runtime is None:
+            os.environ.pop("XDG_RUNTIME_DIR", None)
+        else:
+            os.environ["XDG_RUNTIME_DIR"] = self.old_runtime
+        self.temp.cleanup()
+
+    def test_runtime_socket_is_in_a_private_subdirectory(self):
+        self.assertEqual(ob.socket_path(), os.path.join(self.temp.name, "runtime", "omarchy-buds", "omarchy-buds.sock"))
+
+    def test_publish_replaces_status_symlink_without_following_it(self):
+        os.makedirs(ob.state_dir(), mode=0o700)
+        outside = os.path.join(self.temp.name, "outside")
+        with open(outside, "w", encoding="utf-8") as fh:
+            fh.write("must not be overwritten")
+        os.symlink(outside, ob.status_path())
+        self.daemon.publish()
+        self.assertFalse(os.path.islink(ob.status_path()))
+        with open(outside, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "must not be overwritten")
+        self.assertEqual(ob.read_status_file()[-1:], b"\n")
+
+    def test_read_status_rejects_symlink(self):
+        os.makedirs(ob.state_dir(), mode=0o700)
+        outside = os.path.join(self.temp.name, "outside")
+        with open(outside, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+        os.symlink(outside, ob.status_path())
+        with self.assertRaises(OSError):
+            ob.read_status_file()
+
+    def test_validate_device_requires_pairing_trust_and_expected_uuid(self):
+        path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+        base = {
+            "Alias": "Galaxy Buds4 Pro",
+            "Connected": True,
+            "Paired": True,
+            "Trusted": True,
+            "UUIDs": [ob.UUID_SPP_NEW],
+        }
+        name, model = self.daemon.validate_device(path, base)
+        self.assertEqual((name, model["family"]), ("Galaxy Buds4 Pro", "buds3"))
+        for key in ("Connected", "Paired", "Trusted"):
+            props = dict(base)
+            props[key] = False
+            with self.assertRaises(ValueError):
+                self.daemon.validate_device(path, props)
+
+    def test_rejected_non_bluetooth_descriptor_is_not_consumed(self):
+        left, right = socket.socketpair()
+        try:
+            with self.assertRaises(ValueError):
+                self.daemon.validated_bluetooth_socket(left.fileno())
+            left.send(b"x")
+            self.assertEqual(right.recv(1), b"x")
+        finally:
+            left.close()
+            right.close()
+
+    def test_profile_rejects_spoofed_sender_before_unpacking(self):
+        class Params:
+            def unpack(self):
+                raise AssertionError("spoofed sender must not unpack parameters")
+
+        class Invocation:
+            def __init__(self):
+                self.error = None
+
+            def return_dbus_error(self, name, message):
+                self.error = (name, message)
+
+        self.daemon.bluez_owner = ":1.42"
+        invocation = Invocation()
+        self.daemon.on_profile_call(None, ":1.99", None, None, "NewConnection", Params(), invocation)
+        self.assertEqual(invocation.error[0], "org.bluez.Error.Rejected")
 
 
 def buds3_extended_payload(**overrides):

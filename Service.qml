@@ -41,6 +41,9 @@ Item {
   readonly property bool hasBuds: daemonReachable && connected
   readonly property bool hasBattery: hasBuds && (leftBud.level !== Model.LEVEL_UNKNOWN
     || rightBud.level !== Model.LEVEL_UNKNOWN || caseBattery.level !== Model.LEVEL_UNKNOWN)
+  readonly property int maxStatusChars: 65536
+  readonly property int commandTimeoutMs: 2500
+  readonly property int maxCommandErrorChars: 512
 
   // How long an optimistic value is held before the daemon's own state wins.
   readonly property int settleHoldMs: 4000
@@ -50,6 +53,8 @@ Item {
   // when the click landed cannot snap the control back.
   property string _pendingField: ""
   property var _pendingValue: null
+  property string _commandErrorText: ""
+  property bool _commandTimedOut: false
 
   // Single slot: a verb sent while another is in flight replaces the queued one
   // rather than being dropped, which is what arrow-key repeat produces.
@@ -69,7 +74,15 @@ Item {
   }
 
   function applyLine(raw) {
-    var status = Model.parseStatus(raw)
+    var text = String(raw)
+    if (text.length > maxStatusChars) {
+      daemonReachable = true
+      connected = false
+      schemaUnsupported = false
+      lastError = "status file is too large"
+      return
+    }
+    var status = Model.parseStatus(text)
     if (!status.ok) {
       // A line we cannot read still proves the daemon is running and writing.
       daemonReachable = true
@@ -129,6 +142,12 @@ Item {
     settleTimer.stop()
   }
 
+  function _appendCommandError(data) {
+    var remaining = maxCommandErrorChars - _commandErrorText.length
+    if (remaining > 0)
+      _commandErrorText += String(data).slice(0, remaining)
+  }
+
   function _send(argv, field, optimistic) {
     if (!argv || argv.length === 0) return
     if (commandProcess.running) {
@@ -141,9 +160,12 @@ Item {
     }
     _pendingField = field
     _pendingValue = optimistic
+    _commandErrorText = ""
+    _commandTimedOut = false
     root[field] = optimistic
     settleTimer.restart()
     commandProcess.command = [ctlPath].concat(argv)
+    commandTimeoutTimer.restart()
     commandProcess.running = true
   }
 
@@ -207,6 +229,19 @@ Item {
   }
 
   Timer {
+    id: commandTimeoutTimer
+    interval: root.commandTimeoutMs
+    repeat: false
+    onTriggered: {
+      if (commandProcess.running) {
+        root._commandTimedOut = true
+        // SIGKILL makes this an end-to-end watchdog even if a helper ignores SIGTERM.
+        commandProcess.signal(9)
+      }
+    }
+  }
+
+  Timer {
     id: actionStatusTimer
     interval: root.actionStatusMs
     repeat: false
@@ -228,15 +263,24 @@ Item {
     id: commandProcess
     running: false
     command: []
-    stderr: StdioCollector { id: commandErr; waitForEnd: true }
+    stderr: SplitParser {
+      // Emit each OS read so Quickshell never accumulates an unbounded stderr buffer.
+      splitMarker: ""
+      onRead: function (data) { root._appendCommandError(data) }
+    }
+    onStarted: commandTimeoutTimer.restart()
     onExited: function (exitCode) {
+      commandTimeoutTimer.stop()
+      var timedOut = root._commandTimedOut
+      root._commandTimedOut = false
       if (exitCode !== 0) {
         // Clearing the hold also stops the timer that would have re-read, so do it here.
         root._clearPending()
         root.refresh()
         root._queued = null
         // Its own field with its own timer, or the next status read wipes it unread.
-        var text = String(commandErr.text || "").replace(/^omarchy-buds:\s*/, "")
+        var text = timedOut ? "command timed out" : String(root._commandErrorText || "")
+          .replace(/^omarchy-buds:\s*/, "")
         root.actionStatus = Model.elideError(text || "omarchy-buds rejected the command")
         actionStatusTimer.restart()
       }

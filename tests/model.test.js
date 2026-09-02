@@ -60,6 +60,12 @@ test("empty and non-JSON files are errors, not throws", () => {
   assert.equal(Model.parseStatus("42").lastError, "Status file is not an object")
 })
 
+test("oversized status files are rejected before JSON parsing", () => {
+  const s = Model.parseStatus("x".repeat(Model.MAX_STATUS_CHARS + 1))
+  assert.equal(s.ok, false)
+  assert.equal(s.lastError, "Status file is too large")
+})
+
 test("a newer schema is flagged rather than half-read", () => {
   const s = Model.parseStatus(JSON.stringify({ ...sample, schema_version: 99 }))
   assert.equal(s.ok, false)

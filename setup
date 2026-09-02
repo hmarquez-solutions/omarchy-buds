@@ -1,31 +1,154 @@
 #!/bin/bash
 # omarchy plugin add only clones files, so this is the rest of the install:
-# the daemon into ~/.local/bin and its user service.
+# the daemon into ~/.local/bin and its user services.
 
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")" && pwd)
 bin="$HOME/.local/bin"
 units="$HOME/.config/systemd/user"
+state="$HOME/.local/state/omarchy-buds"
+manifest="$state/install-manifest"
+stage=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-buds-setup.XXXXXXXX")
+tmp_target=""
+rollback_needed=1
+declare -a replaced_targets=()
+declare -a replaced_backups=()
+declare -a replaced_modes=()
+
+die() {
+  echo "omarchy-buds setup: $*" >&2
+  exit 1
+}
+
+cleanup() {
+  [[ -z "$tmp_target" ]] || rm -f -- "$tmp_target"
+  rm -rf -- "$stage"
+}
+
+rollback() {
+  local i target backup mode
+  set +e
+  for ((i=${#replaced_targets[@]}-1; i>=0; i--)); do
+    target=${replaced_targets[$i]}
+    backup=${replaced_backups[$i]}
+    mode=${replaced_modes[$i]}
+    if [[ "$backup" == "__missing__" ]]; then
+      rm -f -- "$target"
+    else
+      install -m "$mode" -- "$backup" "$target"
+    fi
+  done
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  systemctl --user restart omarchy-buds.service >/dev/null 2>&1 || true
+  systemctl --user restart omarchy-buds-osd.service >/dev/null 2>&1 || true
+}
+
+finish() {
+  local rc=$?
+  if ((rollback_needed)); then
+    rollback
+  fi
+  cleanup
+  exit "$rc"
+}
+trap finish EXIT
+
+[[ ! -L "$bin" ]] || die "$bin is a symlink"
+[[ ! -L "$units" ]] || die "$units is a symlink"
+[[ ! -L "$state" ]] || die "$state is a symlink"
+[[ ! -L "$manifest" ]] || die "$manifest is a symlink"
+[[ -d "$bin" || ! -e "$bin" ]] || die "$bin exists but is not a directory"
+[[ -d "$units" || ! -e "$units" ]] || die "$units exists but is not a directory"
+[[ -f "$manifest" || ! -e "$manifest" ]] || die "$manifest exists but is not a file"
+mkdir -p -- "$bin" "$units" "$state"
+chmod 700 -- "$state"
+
+if ! command -v sha256sum >/dev/null 2>&1; then
+  die "sha256sum is required for collision-safe updates"
+fi
+
+declare -a labels=(
+  "bin/omarchy-buds"
+  "bin/omarchy-buds-osd"
+  "unit/omarchy-buds.service"
+  "unit/omarchy-buds-osd.service"
+)
+declare -a sources=(
+  "$root/daemon/omarchy-buds"
+  "$root/daemon/omarchy-buds-osd"
+  "$root/daemon/omarchy-buds.service"
+  "$root/daemon/omarchy-buds-osd.service"
+)
+declare -a targets=(
+  "$bin/omarchy-buds"
+  "$bin/omarchy-buds-osd"
+  "$units/omarchy-buds.service"
+  "$units/omarchy-buds-osd.service"
+)
+declare -a modes=(0755 0755 0644 0644)
+
+manifest_hash() {
+  [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  awk -v label="$1" '$2 == label { print $1; exit }' "$manifest"
+}
+
+declare -a collisions=()
+for i in "${!targets[@]}"; do
+  target=${targets[$i]}
+  [[ ! -L "$target" ]] || die "refusing to replace symlink: $target"
+  [[ ! -e "$target" || -f "$target" ]] || die "refusing to replace non-file: $target"
+  [[ ! -e "$target" ]] && continue
+  current_hash=$(sha256sum -- "$target" | awk '{print $1}')
+  source_hash=$(sha256sum -- "${sources[$i]}" | awk '{print $1}')
+  [[ "$current_hash" == "$source_hash" ]] && continue
+  owned_hash=$(manifest_hash "${labels[$i]}" || true)
+  [[ -n "$owned_hash" && "$owned_hash" == "$current_hash" ]] || collisions+=("$target")
+done
+
+if ((${#collisions[@]})); then
+  echo "The following existing files are not proven to belong to omarchy-buds:" >&2
+  printf '  %s\n' "${collisions[@]}" >&2
+  if [[ "${OMARCHY_BUDS_FORCE:-0}" != "1" ]]; then
+    if [[ ! -t 0 || ! -t 1 ]]; then
+      die "refusing an unattended overwrite; move the files or rerun with OMARCHY_BUDS_FORCE=1"
+    fi
+    read -r -p "Replace these files after making rollback backups? [y/N] " answer
+    [[ "$answer" == "y" || "$answer" == "Y" ]] || die "installation cancelled"
+  fi
+fi
+
+# Build all replacement files before touching an installed target.
+mkdir -p -- "$stage/bin" "$stage/unit"
+for i in "${!sources[@]}"; do
+  install -m "${modes[$i]}" -- "${sources[$i]}" "$stage/${labels[$i]}"
+done
+
+for i in "${!targets[@]}"; do
+  target=${targets[$i]}
+  staged_source="$stage/${labels[$i]}"
+  [[ -e "$target" ]] && [[ "$(sha256sum -- "$target" | awk '{print $1}')" == "$(sha256sum -- "$staged_source" | awk '{print $1}')" ]] && continue
+  backup="__missing__"
+  if [[ -e "$target" ]]; then
+    backup="$stage/backup-$i"
+    cp -p -- "$target" "$backup"
+  fi
+  tmp_target=$(mktemp "$target.omarchy-buds.XXXXXX")
+  install -m "${modes[$i]}" -- "$staged_source" "$tmp_target"
+  replaced_targets+=("$target")
+  replaced_backups+=("$backup")
+  replaced_modes+=("${modes[$i]}")
+  mv -f -- "$tmp_target" "$target"
+done
 
 # Omarchy ships python-gobject in its base install; this only matters on a trimmed system.
 if ! python3 -c 'import gi' 2>/dev/null; then
   omarchy pkg add python-gobject
 fi
 
-mkdir -p "$bin" "$units"
-install -m 0755 "$root/daemon/omarchy-buds" "$bin/omarchy-buds"
-install -m 0644 "$root/daemon/omarchy-buds.service" "$units/omarchy-buds.service"
-
-# The volume-OSD watcher is a companion, not the plugin: it shows Omarchy's
-# volume OSD when the volume changes from outside the shell, such as a swipe on
-# the buds. Installed always; enabled unless OMARCHY_BUDS_OSD=0.
-install -m 0755 "$root/daemon/omarchy-buds-osd" "$bin/omarchy-buds-osd"
-install -m 0644 "$root/daemon/omarchy-buds-osd.service" "$units/omarchy-buds-osd.service"
-
 systemctl --user daemon-reload
 systemctl --user enable omarchy-buds.service
-# enable --now would leave an already-running daemon on the old script after an update.
+# restart ensures an update cannot leave the old daemon process running.
 systemctl --user restart omarchy-buds.service
 
 if [[ "${OMARCHY_BUDS_OSD:-1}" != "0" ]]; then
@@ -37,6 +160,15 @@ else
   osd_state="off (re-run without OMARCHY_BUDS_OSD=0 to enable)"
 fi
 
+# Record ownership only after both services have accepted the staged update.
+manifest_tmp="$stage/install-manifest"
+for i in "${!labels[@]}"; do
+  printf '%s  %s\n' "$(sha256sum -- "${sources[$i]}" | awk '{print $1}')" "${labels[$i]}"
+done > "$manifest_tmp"
+install -m 0600 -- "$manifest_tmp" "$manifest.tmp"
+mv -f -- "$manifest.tmp" "$manifest"
+
+rollback_needed=0
 echo "omarchy-buds is running."
 echo "Volume OSD watcher: $osd_state"
 echo "The bar icon stays hidden until Galaxy Buds are connected."

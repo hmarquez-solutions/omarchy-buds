@@ -38,6 +38,7 @@ var PLACEMENT_LABELS = {
 // Longest error the panel will show inside a row, and the cut that leaves room for the ellipsis.
 var MAX_ERROR_CHARS = 140
 var ELIDED_ERROR_CHARS = 137
+var MAX_STATUS_CHARS = 65536
 
 function defaultBud() {
   return { level: LEVEL_UNKNOWN, charging: false, placement: "disconnected" }
@@ -113,6 +114,10 @@ function stringList(raw, allowed) {
 function parseStatus(raw) {
   var status = defaultStatus()
   var text = String(raw === undefined || raw === null ? "" : raw).trim()
+  if (text.length > MAX_STATUS_CHARS) {
+    status.lastError = "Status file is too large"
+    return status
+  }
   if (text === "") {
     status.lastError = "Empty status file"
     return status

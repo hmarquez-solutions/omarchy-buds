@@ -18,8 +18,10 @@ ProtectSystem=strict
 # strict leaves /home and /run/user to ProtectHome, so home needs this line;
 # the script itself lives under ~/.local/bin and is only ever read.
 ProtectHome=read-only
-# ProtectHome takes /run/user too, and the control socket has to live there.
-ReadWritePaths=%t
+# systemd creates %t/omarchy-buds and exposes only that owner-only directory;
+# the daemon never needs write access to sibling runtime sockets.
+RuntimeDirectory=omarchy-buds
+RuntimeDirectoryMode=0700
 PrivateTmp=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=

@@ -129,7 +129,7 @@ pushing changes: battery, in-ear state, a noise mode switched by pinching a bud.
 Every change is written atomically to `status.json`; the file is removed when the
 daemon stops. The panel watches that file and nothing else, so an idle desktop
 runs no processes on its behalf. `omarchy-buds <verb>` is used only when you
-change something, over a Unix socket in `$XDG_RUNTIME_DIR`.
+change something, over a Unix socket in `$XDG_RUNTIME_DIR/omarchy-buds`.
 
 The plugin never touches Bluetooth itself. If the daemon is not running, the
 panel says so in one line instead of drawing an empty surface.
@@ -143,6 +143,10 @@ omarchy plugin add https://github.com/hmarquez-solutions/omarchy-buds --enable
 
 `--enable` places the widget on the right of the bar. `setup` copies the daemon
 to `~/.local/bin/omarchy-buds`, installs `omarchy-buds.service` and starts it.
+It preflights every fixed target, refuses symlinks/directories and unrelated
+existing files, and records hashes of installed files so later updates can be
+rolled back if service activation fails. An unattended update that would
+replace an unowned file must be explicitly run with `OMARCHY_BUDS_FORCE=1`.
 The icon stays hidden until Galaxy Buds are connected. To keep it visible:
 
 ```bash
@@ -173,6 +177,7 @@ systemctl --user disable --now omarchy-buds.service omarchy-buds-osd.service
 rm -f ~/.local/bin/omarchy-buds ~/.local/bin/omarchy-buds-osd
 rm -f ~/.config/systemd/user/omarchy-buds.service ~/.config/systemd/user/omarchy-buds-osd.service
 rm -rf ~/.local/state/omarchy-buds
+systemctl --user daemon-reload
 omarchy plugin remove io.github.hmarquez-solutions.buds
 ```
 
