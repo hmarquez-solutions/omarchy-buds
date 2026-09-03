@@ -11,7 +11,9 @@ state="$HOME/.local/state/omarchy-buds"
 manifest="$state/install-manifest"
 stage=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-buds-setup.XXXXXXXX")
 tmp_target=""
-rollback_needed=1
+# Only set once an installed file has actually been replaced; a preflight
+# failure must not restart services that this run never touched.
+rollback_needed=0
 declare -a replaced_targets=()
 declare -a replaced_backups=()
 declare -a replaced_modes=()
@@ -93,6 +95,14 @@ manifest_hash() {
   awk -v label="$1" '$2 == label { print $1; exit }' "$manifest"
 }
 
+# Installs made before the manifest existed have nothing to prove ownership
+# with except their content: every file this plugin has ever shipped names
+# itself, and an unrelated file at these exact paths that also mentions
+# omarchy-buds is not a realistic collision.
+looks_like_ours() {
+  grep -q -m1 -F 'omarchy-buds' -- "$1" 2>/dev/null
+}
+
 declare -a collisions=()
 for i in "${!targets[@]}"; do
   target=${targets[$i]}
@@ -103,7 +113,9 @@ for i in "${!targets[@]}"; do
   source_hash=$(sha256sum -- "${sources[$i]}" | awk '{print $1}')
   [[ "$current_hash" == "$source_hash" ]] && continue
   owned_hash=$(manifest_hash "${labels[$i]}" || true)
-  [[ -n "$owned_hash" && "$owned_hash" == "$current_hash" ]] || collisions+=("$target")
+  [[ -n "$owned_hash" && "$owned_hash" == "$current_hash" ]] && continue
+  [[ -z "$owned_hash" ]] && looks_like_ours "$target" && continue
+  collisions+=("$target")
 done
 
 if ((${#collisions[@]})); then
@@ -124,6 +136,7 @@ for i in "${!sources[@]}"; do
   install -m "${modes[$i]}" -- "${sources[$i]}" "$stage/${labels[$i]}"
 done
 
+rollback_needed=1
 for i in "${!targets[@]}"; do
   target=${targets[$i]}
   staged_source="$stage/${labels[$i]}"

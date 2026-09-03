@@ -166,6 +166,19 @@ class BoundaryTests(unittest.TestCase):
             left.close()
             right.close()
 
+    def test_rejected_non_socket_descriptor_leaks_nothing(self):
+        read_end, write_end = os.pipe()
+        try:
+            before = len(os.listdir("/proc/self/fd"))
+            with self.assertRaises(ValueError):
+                self.daemon.validated_bluetooth_socket(read_end)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+            os.write(write_end, b"y")
+            self.assertEqual(os.read(read_end, 1), b"y")
+        finally:
+            os.close(read_end)
+            os.close(write_end)
+
     def test_profile_rejects_spoofed_sender_before_unpacking(self):
         class Params:
             def unpack(self):

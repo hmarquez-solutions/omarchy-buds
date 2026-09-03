@@ -145,8 +145,9 @@ omarchy plugin add https://github.com/hmarquez-solutions/omarchy-buds --enable
 to `~/.local/bin/omarchy-buds`, installs `omarchy-buds.service` and starts it.
 It preflights every fixed target, refuses symlinks/directories and unrelated
 existing files, and records hashes of installed files so later updates can be
-rolled back if service activation fails. An unattended update that would
-replace an unowned file must be explicitly run with `OMARCHY_BUDS_FORCE=1`.
+rolled back if service activation fails. Files from an install that predates
+the manifest are recognised by content. An unattended update that would replace
+a file it cannot prove is its own must be run with `OMARCHY_BUDS_FORCE=1`.
 The icon stays hidden until Galaxy Buds are connected. To keep it visible:
 
 ```bash
@@ -171,6 +172,14 @@ Nothing else. No system-wide units, and no extra packages on a stock Omarchy
 install.
 
 ## Remove
+
+```bash
+~/.config/omarchy/plugins/io.github.hmarquez-solutions.buds/uninstall
+omarchy plugin remove io.github.hmarquez-solutions.buds
+```
+
+`uninstall` stops and disables both services, removes only files it can prove
+are its own, and deletes the state directory. The same by hand:
 
 ```bash
 systemctl --user disable --now omarchy-buds.service omarchy-buds-osd.service

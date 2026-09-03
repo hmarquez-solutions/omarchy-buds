@@ -1,0 +1,79 @@
+#!/bin/bash
+# Undo everything setup installed: the two user services, the two scripts in
+# ~/.local/bin, and the state directory. Files are removed only when they are
+# proven to be ours (manifest hash, current source hash, or a legacy install
+# that names omarchy-buds); anything else is reported and left alone.
+
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")" && pwd)
+bin="$HOME/.local/bin"
+units="$HOME/.config/systemd/user"
+state="$HOME/.local/state/omarchy-buds"
+manifest="$state/install-manifest"
+
+declare -a labels=(
+  "bin/omarchy-buds"
+  "bin/omarchy-buds-osd"
+  "unit/omarchy-buds.service"
+  "unit/omarchy-buds-osd.service"
+)
+declare -a sources=(
+  "$root/daemon/omarchy-buds"
+  "$root/daemon/omarchy-buds-osd"
+  "$root/daemon/omarchy-buds.service"
+  "$root/daemon/omarchy-buds-osd.service"
+)
+declare -a targets=(
+  "$bin/omarchy-buds"
+  "$bin/omarchy-buds-osd"
+  "$units/omarchy-buds.service"
+  "$units/omarchy-buds-osd.service"
+)
+
+manifest_hash() {
+  [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  awk -v label="$1" '$2 == label { print $1; exit }' "$manifest"
+}
+
+file_hash() {
+  sha256sum -- "$1" | awk '{print $1}'
+}
+
+ours() {
+  local target=$1 label=$2 source=$3 current owned
+  [[ -f "$target" && ! -L "$target" ]] || return 1
+  current=$(file_hash "$target")
+  owned=$(manifest_hash "$label" || true)
+  [[ -n "$owned" && "$owned" == "$current" ]] && return 0
+  [[ -f "$source" && "$(file_hash "$source")" == "$current" ]] && return 0
+  [[ -z "$owned" ]] && grep -q -m1 -F 'omarchy-buds' -- "$target" 2>/dev/null && return 0
+  return 1
+}
+
+systemctl --user disable --now omarchy-buds.service omarchy-buds-osd.service 2>/dev/null || true
+
+declare -a kept=()
+for i in "${!targets[@]}"; do
+  target=${targets[$i]}
+  [[ -e "$target" || -L "$target" ]] || continue
+  if ours "$target" "${labels[$i]}" "${sources[$i]}"; then
+    rm -f -- "$target"
+  else
+    kept+=("$target")
+  fi
+done
+
+systemctl --user daemon-reload
+
+if [[ -d "$state" && ! -L "$state" ]]; then
+  rm -rf -- "$state"
+fi
+
+if ((${#kept[@]})); then
+  echo "Left in place because they are not proven to belong to omarchy-buds:" >&2
+  printf '  %s\n' "${kept[@]}" >&2
+fi
+
+echo "omarchy-buds services and files are removed."
+echo "To remove the bar plugin itself: omarchy plugin remove io.github.hmarquez-solutions.buds"

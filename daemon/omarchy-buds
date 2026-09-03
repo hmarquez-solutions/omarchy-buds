@@ -855,13 +855,18 @@ class Daemon:
         """Validate BlueZ's passed descriptor without consuming it on failure."""
         if not isinstance(fd, int) or fd < 0:
             raise ValueError("invalid Bluetooth socket descriptor")
+        # Inspect a duplicate so a rejected descriptor is left untouched. The
+        # socket object is only built once fstat proves it is a socket, so a
+        # plain file or pipe cannot make the constructor raise and leak the dup.
+        duplicate = -1
         probe = None
         try:
             duplicate = os.dup(fd)
-            probe = socket.socket(fileno=duplicate)
-            st = os.fstat(probe.fileno())
+            st = os.fstat(duplicate)
             if not stat.S_ISSOCK(st.st_mode):
                 raise ValueError("Profile1 descriptor is not a socket")
+            probe = socket.socket(fileno=duplicate)
+            duplicate = -1  # the probe socket owns it now
             try:
                 socket_type = probe.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
                 domain = probe.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_DOMAIN", 39))
@@ -876,6 +881,8 @@ class Daemon:
         finally:
             if probe is not None:
                 probe.close()
+            elif duplicate >= 0:
+                os.close(duplicate)
         return socket.socket(getattr(socket, "AF_BLUETOOTH", socket.AF_UNIX), socket.SOCK_STREAM, fileno=fd)
 
     def drop_link(self) -> None:
