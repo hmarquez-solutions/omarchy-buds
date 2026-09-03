@@ -16,6 +16,14 @@ var NOISE_LABELS = {
   adaptive: "Adaptive"
 }
 
+// Short enough for a chip and the hero pill.
+var NOISE_SHORT = {
+  off: "Off",
+  anc: "ANC",
+  ambient: "Ambient",
+  adaptive: "Adaptive"
+}
+
 var NOISE_KEYS = { o: "off", n: "anc", a: "ambient", d: "adaptive" }
 
 var EQ_LABELS = {
@@ -25,6 +33,16 @@ var EQ_LABELS = {
   dynamic: "Dynamic",
   clear: "Clear",
   treble: "Treble Boost"
+}
+
+// Chip labels; the long names above stay for the cycle key's status text.
+var EQ_SHORT = {
+  off: "Off",
+  bass: "Bass",
+  soft: "Soft",
+  dynamic: "Dynamic",
+  clear: "Clear",
+  treble: "Treble"
 }
 
 var PLACEMENT_LABELS = {
@@ -205,8 +223,41 @@ function noiseModeName(mode) {
   return NOISE_LABELS[mode] || "Unknown"
 }
 
+function noiseModeShort(mode) {
+  return NOISE_SHORT[mode] || "Unknown"
+}
+
 function eqName(preset) {
   return EQ_LABELS[preset] || "Off"
+}
+
+function eqShort(preset) {
+  return EQ_SHORT[preset] || "Off"
+}
+
+// Values with their labels, in the order the daemon listed them, for a chip row.
+function chipOptions(values, labeler) {
+  var out = []
+  if (!values) return out
+  for (var i = 0; i < values.length; i++) out.push({ value: values[i], label: labeler(values[i]) })
+  return out
+}
+
+// True when a bud that is reporting sits at or under the threshold and is not on charge.
+function anyBudLow(left, right, threshold) {
+  var buds = [left, right]
+  for (var i = 0; i < buds.length; i++) {
+    var b = buds[i]
+    if (b && b.level !== LEVEL_UNKNOWN && b.level <= threshold && !b.charging) return true
+  }
+  return false
+}
+
+// Position of `current` in `list`, or 0 so a cursor always lands on a real chip.
+function indexOrFirst(list, current) {
+  if (!list) return 0
+  var at = list.indexOf(current)
+  return at < 0 ? 0 : at
 }
 
 function nextIn(list, current) {
