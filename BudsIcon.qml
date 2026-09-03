@@ -1,40 +1,50 @@
 import QtQuick
-import QtQuick.Effects
+import QtQuick.Shapes
 import qs.Commons
+import "BudsOutline.js" as Outline
 
-// Samsung's black Buds4 Pro product artwork on transparency. MultiEffect grows
-// its alpha into a fine keyline using the shell foreground passed by Panel.qml,
-// so the pair follows every theme while keeping the product detail intact.
+// The Galaxy Buds4 Pro pair as a hairline outline. The path is traced from
+// Samsung's product cut-out (tools/trace-icon.py) and scaled here at run
+// time, so it is a single-colour mark like every other glyph in the bar:
+// the stroke takes the shell foreground and follows each theme with it.
 Item {
   id: root
 
+  // Width of the pair. Height follows the product's proportions.
   property real iconSize: 16
   property color color: Color.foreground
+  property real strokeWidth: 1
+  // Optional wash inside the outline; 0 leaves it as pure line work.
+  property real fillOpacity: 0
 
   implicitWidth: iconSize
-  implicitHeight: iconSize
+  implicitHeight: Math.ceil(iconSize * Outline.ASPECT)
 
-  Image {
-    id: product
+  // Draw inside the stroke so nothing is clipped at the edges.
+  readonly property real drawWidth: Math.max(1, iconSize - strokeWidth)
+  readonly property real inset: strokeWidth / 2
+  readonly property color wash: Qt.rgba(color.r, color.g, color.b, color.a * fillOpacity)
+
+  Shape {
     anchors.fill: parent
-    source: "assets/buds4-pro-black-cutout.png"
-    fillMode: Image.PreserveAspectFit
-    smooth: true
-    mipmap: true
-    asynchronous: false
-    cache: true
-    visible: false
-    layer.enabled: true
-  }
+    preferredRendererType: Shape.CurveRenderer
 
-  MultiEffect {
-    anchors.fill: product
-    source: product
-    autoPaddingEnabled: false
-    shadowEnabled: true
-    shadowColor: root.color
-    shadowOpacity: 0.82
-    shadowBlur: 0.0
-    shadowScale: root.iconSize < 24 ? 1.055 : 1.022
+    ShapePath {
+      strokeColor: root.color
+      strokeWidth: root.strokeWidth
+      fillColor: root.wash
+      joinStyle: ShapePath.RoundJoin
+      capStyle: ShapePath.RoundCap
+      PathSvg { path: Outline.svgPath(0, root.drawWidth, root.inset, root.inset) }
+    }
+
+    ShapePath {
+      strokeColor: root.color
+      strokeWidth: root.strokeWidth
+      fillColor: root.wash
+      joinStyle: ShapePath.RoundJoin
+      capStyle: ShapePath.RoundCap
+      PathSvg { path: Outline.svgPath(1, root.drawWidth, root.inset, root.inset) }
+    }
   }
 }

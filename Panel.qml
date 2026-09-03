@@ -15,12 +15,14 @@ Panel {
 
   property int cursorIndex: 0
   property bool cursorActive: false
+  // Chip under the cursor on the two chip rows; h and l walk it, enter applies it.
+  property int modeIndex: 0
+  property int eqIndex: 0
 
   readonly property bool hideWhenDisconnected: setting("hideWhenDisconnected", true) === true
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property color barIconColor: buds.hasBuds ? barForeground : Qt.darker(barForeground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   // Say nothing extra once a section already explains the state.
   readonly property bool guidanceVisible: !buds.hasBuds && !buds.schemaUnsupported
@@ -29,6 +31,12 @@ Panel {
 
   readonly property int lowBatteryPercent: 20
   readonly property int phraseIntervalMs: 2800
+
+  readonly property bool lowBattery: buds.hasBuds && Model.anyBudLow(buds.leftBud, buds.rightBud, lowBatteryPercent)
+  // Dim while nothing is connected, the bar's urgent tone once a bud runs low; the mark itself never changes.
+  readonly property color barIconColor: !buds.hasBuds ? Qt.darker(barForeground, 1.55)
+    : lowBattery ? urgent
+    : barForeground
 
   // Ten, matching the stock panels.
   readonly property var activePhrases: [
@@ -50,22 +58,24 @@ Panel {
   readonly property bool conversationVisible: buds.hasBuds && buds.can("conversation_detect")
   readonly property bool oneBudVisible: buds.hasBuds && buds.can("one_bud_anc")
   readonly property bool touchVisible: buds.hasBuds && buds.can("touch_lock")
-  readonly property bool eqVisible: buds.hasBuds && buds.can("equalizer")
+  readonly property bool eqVisible: buds.hasBuds && buds.can("equalizer") && buds.eqPresets.length > 0
   readonly property bool findVisible: buds.hasBuds && buds.can("find")
   readonly property bool togglesVisible: conversationVisible || oneBudVisible || touchVisible
-  readonly property bool valuesVisible: eqVisible || findVisible
+
+  readonly property var modeOptions: Model.chipOptions(buds.availableModes, Model.noiseModeShort)
+  readonly property var eqOptions: Model.chipOptions(buds.eqPresets, Model.eqShort)
 
   // Rebuilt whenever a section appears, so j and k never land on a hidden control.
   readonly property var cursorRows: {
     var rows = []
     if (!buds.hasBuds) return rows
-    for (var i = 0; i < buds.availableModes.length; i++) rows.push("mode:" + buds.availableModes[i])
+    if (findVisible) rows.push("find")
+    if (modesVisible) rows.push("modes")
     if (ambientVisible) rows.push("ambient")
     if (conversationVisible) rows.push("conversation")
     if (oneBudVisible) rows.push("onebud")
     if (touchVisible) rows.push("touch")
     if (eqVisible) rows.push("eq")
-    if (findVisible) rows.push("find")
     return rows
   }
 
@@ -77,24 +87,33 @@ Panel {
     return cursorActive && cursorRow === name
   }
 
+  // Land on the chip that is already selected, so enter without h or l changes nothing.
+  function syncChipCursor() {
+    if (cursorRow === "modes") modeIndex = Model.indexOrFirst(buds.availableModes, buds.noiseMode)
+    else if (cursorRow === "eq") eqIndex = Model.indexOrFirst(buds.eqPresets, buds.eqPreset)
+  }
+
   function moveCursor(dy) {
     cursorActive = true
     if (cursorRows.length === 0) return
     cursorIndex = Math.max(0, Math.min(cursorRows.length - 1, cursorIndex + dy))
+    syncChipCursor()
   }
 
   function nudgeCursor(dx) {
     if (cursorRow === "ambient") buds.setAmbientVolume(buds.ambientVolume + dx)
+    else if (cursorRow === "modes") modeIndex = Math.max(0, Math.min(modeOptions.length - 1, modeIndex + dx))
+    else if (cursorRow === "eq") eqIndex = Math.max(0, Math.min(eqOptions.length - 1, eqIndex + dx))
   }
 
   function activateCursor() {
     var name = cursorRow
-    if (name.indexOf("mode:") === 0) buds.setNoiseMode(name.substring(5))
+    if (name === "find") buds.toggleFinding()
+    else if (name === "modes" && modeIndex < buds.availableModes.length) buds.setNoiseMode(buds.availableModes[modeIndex])
     else if (name === "conversation") buds.setConversationDetect(!buds.conversationDetect)
     else if (name === "onebud") buds.setOneBudAnc(!buds.oneBudAnc)
     else if (name === "touch") buds.setTouchLocked(!buds.touchLocked)
-    else if (name === "eq") buds.cycleEqPreset()
-    else if (name === "find") buds.toggleFinding()
+    else if (name === "eq" && eqIndex < buds.eqPresets.length) buds.setEqPreset(buds.eqPresets[eqIndex])
   }
 
   function focusRow(name) {
@@ -111,6 +130,8 @@ Panel {
   onOpenedChanged: if (opened) {
     cursorActive = false
     cursorIndex = 0
+    modeIndex = Model.indexOrFirst(buds.availableModes, buds.noiseMode)
+    eqIndex = Model.indexOrFirst(buds.eqPresets, buds.eqPreset)
     if (panelFlick) panelFlick.contentY = 0
     buds.refresh()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
@@ -139,8 +160,9 @@ Panel {
       Item {
         BudsIcon {
           anchors.centerIn: parent
-          // A pair of buds is wider than it is tall, so it takes a size above the stock 12 to carry the row.
-          iconSize: Style.space(13)
+          // The pair is wider than tall, so it takes the whole canvas width to match the glyphs' height.
+          iconSize: Style.bar.iconCanvas
+          strokeWidth: 1.2
           color: root.barIconColor
         }
       }
@@ -149,6 +171,52 @@ Panel {
       if (buttonCode === Qt.RightButton) buds.cycleNoiseMode()
       else if (buttonCode === Qt.MiddleButton) buds.setTouchLocked(!buds.touchLocked)
       else root.toggle()
+    }
+  }
+
+  // The current mode and the ringer share the hero's trailing slot, so the two
+  // sit on one centreline at one height instead of the pill riding the title row.
+  Component {
+    id: heroControls
+
+    Row {
+      spacing: Style.space(8)
+
+      BorderSurface {
+        visible: buds.noiseMode !== ""
+        implicitWidth: modeText.implicitWidth + Style.space(14)
+        implicitHeight: findBell.visible ? findBell.height : modeText.implicitHeight + Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+        color: "transparent"
+        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        radius: Style.cornerRadius
+
+        Text {
+          id: modeText
+          textFormat: Text.PlainText
+          anchors.centerIn: parent
+          text: Model.noiseModeShort(buds.noiseMode)
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+      }
+
+      PanelActionButton {
+        id: findBell
+        visible: root.findVisible
+        anchors.verticalCenter: parent.verticalCenter
+        iconText: buds.finding ? "󰂟" : "󰂚"
+        tooltipText: buds.finding ? "Stop ringing" : "Ring the buds"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.iconLarge
+        bordered: true
+        hasCursor: root.rowHasCursor("find")
+        onClicked: buds.toggleFinding()
+        onHovered: function (h) { if (h) root.focusRow("find") }
+      }
     }
   }
 
@@ -166,7 +234,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function (dx, dy) {
-        if (!root.cursorActive) { root.cursorActive = true; return }
+        if (!root.cursorActive) { root.cursorActive = true; root.syncChipCursor(); return }
         if (dy !== 0) root.moveCursor(dy)
         else if (dx !== 0) root.nudgeCursor(dx)
       }
@@ -210,16 +278,18 @@ Panel {
               : buds.schemaUnsupported ? "Unsupported status schema"
               : buds.daemonReachable ? "Not connected"
               : "omarchy-buds is not running"
-            detail: buds.hasBuds && buds.deviceName !== "" && buds.deviceName !== buds.modelName ? buds.deviceName : ""
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconOpacity: buds.hasBuds ? 1.0 : 0.5
             iconComponent: Component {
               BudsIcon {
-                iconSize: Style.font.displayLarge
+                iconSize: Style.space(38)
+                strokeWidth: 1.5
+                fillOpacity: 0.08
                 color: buds.hasBuds ? root.foreground : root.dim
               }
             }
+            trailingControl: buds.hasBuds ? heroControls : null
           }
 
           Text {
@@ -271,18 +341,14 @@ Panel {
               fontFamily: root.fontFamily
             }
 
-            Column {
+            ChipRow {
               width: parent.width
-              spacing: Style.space(6)
-
-              Repeater {
-                model: buds.availableModes
-                ModeRow {
-                  required property var modelData
-                  width: parent.width
-                  mode: modelData
-                }
-              }
+              rowName: "modes"
+              options: root.modeOptions
+              value: buds.noiseMode
+              cursorIndex: root.modeIndex
+              onPicked: function (v) { buds.setNoiseMode(v) }
+              onCursorMoved: function (i) { root.modeIndex = i }
             }
 
             SliderRow {
@@ -306,7 +372,7 @@ Panel {
               width: parent.width
               rowName: "conversation"
               label: "Voice detect"
-              caption: "Switch to Ambient sound when you start talking"
+              caption: "Ambient Sound while you talk"
               checked: buds.conversationDetect
               onToggled: buds.setConversationDetect(!buds.conversationDetect)
             }
@@ -333,31 +399,29 @@ Panel {
           }
 
           PanelSeparator {
-            visible: root.valuesVisible
+            visible: root.eqVisible
             foreground: root.foreground
           }
 
           Column {
-            visible: root.valuesVisible
+            visible: root.eqVisible
             width: parent.width
-            spacing: Style.space(6)
+            spacing: Style.space(10)
 
-            ValueRow {
-              visible: root.eqVisible
-              width: parent.width
-              rowName: "eq"
-              label: "Equalizer"
-              value: Model.eqName(buds.eqPreset)
-              onActivated: buds.cycleEqPreset()
+            PanelSectionHeader {
+              text: "EQUALIZER"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
             }
 
-            ValueRow {
-              visible: root.findVisible
+            ChipRow {
               width: parent.width
-              rowName: "find"
-              label: "Find my buds"
-              value: buds.finding ? "Ringing… click to stop" : "Ring"
-              onActivated: buds.toggleFinding()
+              rowName: "eq"
+              options: root.eqOptions
+              value: buds.eqPreset
+              cursorIndex: root.eqIndex
+              onPicked: function (v) { buds.setEqPreset(v) }
+              onCursorMoved: function (i) { root.eqIndex = i }
             }
           }
 
@@ -442,78 +506,120 @@ Panel {
           height: parent.height
           radius: parent.radius
           color: budRow.low ? root.urgent : root.foreground
+
+          Behavior on width { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
         }
       }
 
       Text {
         textFormat: Text.PlainText
         text: Model.levelText(budRow.level)
-        color: root.foreground
+        color: budRow.low ? root.urgent : root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         horizontalAlignment: Text.AlignRight
         Layout.preferredWidth: Style.space(38)
       }
 
-      Text {
-        textFormat: Text.PlainText
-        text: budRow.meta
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
-        Layout.preferredWidth: Style.space(56)
+      Row {
+        spacing: Style.space(4)
+        Layout.preferredWidth: Style.space(70)
+
+        Text {
+          textFormat: Text.PlainText
+          visible: budRow.charging
+          text: "󱐋"
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          text: budRow.meta
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+          anchors.verticalCenter: parent.verticalCenter
+        }
       }
     }
   }
 
-  component ModeRow: CursorSurface {
-    id: modeRow
-    property string mode: ""
+  // Pick one of N as a row of bordered chips, the way the power panel offers its profiles.
+  // Every chip is its own cursor target; the row it sits in is one j/k stop.
+  //
+  // Sizing: equal cells when the longest label allows it, otherwise each chip
+  // keeps its natural width and the spare room is shared out, and only when
+  // even that does not fit does the Flow wrap.
+  component ChipRow: Flow {
+    id: chips
+    property string rowName: ""
+    property var options: []
+    property string value: ""
+    property int cursorIndex: 0
 
-    readonly property string rowName: "mode:" + mode
-    readonly property bool selected: buds.noiseMode === mode
+    signal picked(string value)
+    signal cursorMoved(int index)
 
-    hasCursor: root.rowHasCursor(rowName)
-    foreground: root.foreground
-    implicitHeight: modeLabel.implicitHeight + Style.spacing.rowPaddingX
+    spacing: Style.space(6)
 
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onEntered: root.focusRow(modeRow.rowName)
-      onClicked: buds.setNoiseMode(modeRow.mode)
+    property real naturalTotal: 0
+    property real naturalMax: 0
+    readonly property int count: options ? options.length : 0
+    readonly property real spare: width - spacing * Math.max(0, count - 1) - naturalTotal
+    readonly property real cellWidth: count > 0 ? Math.floor((width - spacing * (count - 1)) / count) : 0
+
+    function measure() {
+      var total = 0
+      var widest = 0
+      for (var i = 0; i < children.length; i++) {
+        var c = children[i]
+        if (!c || c.chipNatural === undefined) continue
+        total += c.chipNatural
+        widest = Math.max(widest, c.chipNatural)
+      }
+      naturalTotal = total
+      naturalMax = widest
     }
 
-    RowLayout {
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
-      anchors.rightMargin: Style.space(10)
-      spacing: Style.space(8)
+    function chipWidth(natural) {
+      if (count === 0) return natural
+      if (naturalMax <= cellWidth) return cellWidth
+      if (spare >= 0) return natural + spare / count
+      return natural
+    }
 
-      Text {
-        textFormat: Text.PlainText
-        id: modeLabel
-        Layout.fillWidth: true
-        text: Model.noiseModeName(modeRow.mode)
-        color: root.foreground
-        opacity: modeRow.selected ? 1.0 : 0.75
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        elide: Text.ElideRight
-      }
+    Repeater {
+      model: chips.options
+      onItemRemoved: Qt.callLater(chips.measure)
 
-      Text {
-        textFormat: Text.PlainText
-        Layout.alignment: Qt.AlignVCenter
-        text: Model.GLYPH_CHECK
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.icon
-        opacity: modeRow.selected ? 1.0 : 0.0
+      Button {
+        required property var modelData
+        required property int index
+        readonly property real chipNatural: implicitWidth
+        onChipNaturalChanged: chips.measure()
+        Component.onCompleted: chips.measure()
+
+        text: modelData.label
+        fontSize: Style.font.bodySmall
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        // A touch tighter than a stock button, so six equalizer presets share one line.
+        horizontalPadding: Style.space(8)
+        verticalPadding: Style.spacing.controlPaddingY + Style.space(1)
+        bordered: true
+        active: modelData.value === chips.value
+        hasCursor: root.rowHasCursor(chips.rowName) && chips.cursorIndex === index
+        width: chips.chipWidth(implicitWidth)
+        onClicked: chips.picked(modelData.value)
+        onHovered: function (h) {
+          if (!h) return
+          root.focusRow(chips.rowName)
+          chips.cursorMoved(index)
+        }
       }
     }
   }
@@ -584,67 +690,26 @@ Panel {
     }
   }
 
-  component ValueRow: CursorSurface {
-    id: valueRow
-    property string rowName: ""
-    property string label: ""
-    property string value: ""
-
-    signal activated()
-
-    hasCursor: root.rowHasCursor(rowName)
-    foreground: root.foreground
-    implicitHeight: valueLabel.implicitHeight + Style.spacing.rowPaddingX
-
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onEntered: root.focusRow(valueRow.rowName)
-      onClicked: valueRow.activated()
-    }
-
-    RowLayout {
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
-      anchors.rightMargin: Style.space(10)
-      spacing: Style.space(8)
-
-      Text {
-        textFormat: Text.PlainText
-        id: valueLabel
-        Layout.fillWidth: true
-        text: valueRow.label
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        elide: Text.ElideRight
-      }
-
-      Text {
-        textFormat: Text.PlainText
-        text: valueRow.value
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        elide: Text.ElideRight
-      }
-    }
-  }
-
-  component SliderRow: Item {
+  // The ambient slider is a cursor stop too, so h and l have somewhere visible to act.
+  component SliderRow: CursorSurface {
     id: sliderRow
-    implicitHeight: sliderColumn.implicitHeight
+    hasCursor: root.rowHasCursor("ambient")
+    foreground: root.foreground
+    implicitHeight: sliderColumn.implicitHeight + Style.space(10)
+
+    // A HoverHandler rather than a MouseArea, so the slider underneath keeps its drag.
+    HoverHandler {
+      onHoveredChanged: if (hovered) root.focusRow("ambient")
+    }
 
     Column {
       id: sliderColumn
       anchors.left: parent.left
       anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
-      spacing: Style.space(4)
+      spacing: Style.space(2)
 
       Row {
         width: parent.width

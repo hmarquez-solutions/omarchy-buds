@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="docs/bar.png" alt="The Galaxy Buds icon in the Omarchy bar, next to the clock and weather" width="478">
-  <br><sub>The bar mark is a cut-out of the Buds4 Pro.</sub>
+  <br><sub>The bar mark is an outline of the Buds4 Pro, drawn in the theme's foreground like every other glyph.</sub>
 </p>
 
 ## What it shows
@@ -19,20 +19,22 @@
 - **Battery** for the left bud, the right bud and the case, each with a charging
   and in-ear hint. BlueZ only ever reports one number for the pair; the
   per-bud and case levels come from Samsung's own control channel.
-- **Noise control**: Off, Noise Cancelling, Ambient Sound and, on the models
-  that have it, Adaptive. Only the modes the daemon says the device has are
-  drawn.
+- **Noise control**: Off, ANC, Ambient and, on the models that have it,
+  Adaptive, as a row of chips. Only the modes the daemon says the device has
+  are drawn, and the current one also sits in the pill next to the name.
 - **Ambient volume**, shown while Ambient Sound is the active mode.
 - **Voice detect** (Samsung's "detect conversations"), **one-bud noise
   controls** and **touch lock**, each gated on what the model supports.
-- **Equalizer** preset and **Find my buds**, which rings them, and refuses to
-  while they are in your ears.
+- **Equalizer** presets as chips, and **Find my buds**, the bell next to the
+  name, which rings them and refuses to while they are in your ears.
+- The bar icon dims while nothing is connected and takes the theme's urgent
+  colour once a bud drops to 20% off the charger.
 
 ## Screenshots
 
 | | |
 |:---:|:---:|
-| <img src="docs/panel.png" alt="Galaxy Buds4 Pro panel" width="360"> | **Galaxy Buds4 Pro, both buds in ear**<br>Ambient Sound selected, with the ambient-volume slider, the three toggles, and the equalizer and find-my-buds rows below. |
+| <img src="docs/panel.png" alt="Galaxy Buds4 Pro panel" width="360"> | **Galaxy Buds4 Pro, both buds in ear**<br>Adaptive selected and voice detect on, with the noise-control and equalizer chips and the three toggles; the bell next to the name rings the buds. Picking Ambient adds the ambient-volume slider under the chips. |
 
 The panel is built from the capability keys the daemon publishes, so a model
 without voice detect gets no Voice detect row, and a model that never reports
@@ -195,8 +197,8 @@ omarchy plugin remove io.github.hmarquez-solutions.buds
 | Key | Action |
 |-----|--------|
 | `j` / `k`, `↓` / `↑` | move between rows |
-| `enter` / `space` | activate the current row |
-| `←` / `→` | adjust the ambient volume |
+| `h` / `l`, `←` / `→` | walk the chips on the noise-control and equalizer rows, or adjust the ambient volume |
+| `enter` / `space` | activate the current row, or apply the chip under the cursor |
 | `o` | Off |
 | `n` | Noise Cancelling |
 | `a` | Ambient Sound |
@@ -236,6 +238,18 @@ The panel itself answers `omarchy-shell buds open|close|toggle|noise|status`.
 |---------|---------|-------|
 | Hide when disconnected | on | Leaves the bar entirely rather than sitting there with nothing to say. |
 | Path to omarchy-buds | empty | Leave empty to find it on `PATH`. |
+
+## Icon
+
+The bar and hero draw the pair as a hairline outline with `QtQuick.Shapes`, so
+it takes the bar foreground like a font glyph and follows every theme. The path
+in `BudsOutline.js` is traced from Samsung's product cut-out; regenerate it
+with:
+
+```bash
+magick assets/buds4-pro-black-cutout.png -alpha extract -compress none pgm:- \
+  | python3 tools/trace-icon.py > BudsOutline.js
+```
 
 ## Tests
 

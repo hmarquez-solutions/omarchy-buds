@@ -120,6 +120,37 @@ test("lowestLevel ignores unknown buds", () => {
   assert.equal(Model.lowestLevel(s), Model.LEVEL_UNKNOWN)
 })
 
+test("short noise labels fit a chip", () => {
+  assert.equal(Model.noiseModeShort("anc"), "ANC")
+  assert.equal(Model.noiseModeShort("ambient"), "Ambient")
+  assert.equal(Model.noiseModeShort("nope"), "Unknown")
+  assert.equal(Model.eqShort("bass"), "Bass")
+  assert.equal(Model.eqShort("treble"), "Treble")
+  assert.equal(Model.eqShort("nope"), "Off")
+})
+
+test("chipOptions keeps the daemon's order and labels each value", () => {
+  same(Model.chipOptions(["off", "anc"], Model.noiseModeShort), [{ value: "off", label: "Off" }, { value: "anc", label: "ANC" }])
+  same(Model.chipOptions(null, Model.eqName), [])
+})
+
+test("anyBudLow ignores unknown and charging buds", () => {
+  const low = { level: 15, charging: false, placement: "wearing" }
+  const lowCharging = { level: 15, charging: true, placement: "case" }
+  const fine = { level: 80, charging: false, placement: "wearing" }
+  assert.equal(Model.anyBudLow(low, fine, 20), true)
+  assert.equal(Model.anyBudLow(fine, low, 20), true)
+  assert.equal(Model.anyBudLow(lowCharging, fine, 20), false)
+  assert.equal(Model.anyBudLow(Model.defaultBud(), fine, 20), false)
+  assert.equal(Model.anyBudLow({ level: 20, charging: false }, fine, 20), true)
+})
+
+test("indexOrFirst falls back to the first chip", () => {
+  assert.equal(Model.indexOrFirst(["off", "anc", "ambient"], "ambient"), 2)
+  assert.equal(Model.indexOrFirst(["off", "anc"], ""), 0)
+  assert.equal(Model.indexOrFirst(null, "anc"), 0)
+})
+
 test("errors are elided to one row", () => {
   const long = "x".repeat(300)
   assert.equal(Model.elideError(long).length, Model.ELIDED_ERROR_CHARS + 1)
