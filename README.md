@@ -164,7 +164,8 @@ Update with `omarchy plugin update io.github.hmarquez-solutions.buds` and run
 `setup` is the only extra step after `omarchy plugin add`. It puts:
 
 - the daemon at `~/.local/bin/omarchy-buds`, and a user unit
-  `omarchy-buds.service` (enabled and started)
+  `omarchy-buds.service` (enabled and started) that runs it under
+  `/usr/bin/python3 -I`
 - the volume-OSD watcher at `~/.local/bin/omarchy-buds-osd` and
   `omarchy-buds-osd.service` (enabled unless you set `OMARCHY_BUDS_OSD=0`)
 - `python-gobject`, via `omarchy pkg add`, only if it is missing — Omarchy
@@ -191,6 +192,24 @@ rm -rf ~/.local/state/omarchy-buds
 systemctl --user daemon-reload
 omarchy plugin remove io.github.hmarquez-solutions.buds
 ```
+
+## Security
+
+The marketplace review asked for specific properties. Each one, and where it
+lives:
+
+| Property | How | Where |
+|----------|-----|-------|
+| Only BlueZ can hand the daemon a socket | `Profile1` calls are accepted only from `org.bluez`'s unique bus name, resolved with `GetNameOwner` and re-pinned on `NameOwnerChanged`; the well-known name is never trusted. | `daemon/omarchy-buds` (`on_profile_call`) |
+| A fixed interpreter, no environment influence | The shebang, the unit's `ExecStart` and the panel all run `/usr/bin/python3 -I`. Isolated mode ignores `PYTHONPATH`, `PYTHONHOME` and the user site directory and keeps the script directory off `sys.path`. The panel clears the shell's environment and passes only `HOME`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, a fixed `PATH` and `LANG`. | `daemon/omarchy-buds:1`, `daemon/omarchy-buds.service`, `Service.qml` |
+| Helpers bound to trusted paths | `setup`, `uninstall` and the OSD watcher export `PATH=/usr/bin:/bin` and call `/usr/bin/pactl`, `/usr/bin/omarchy-osd` and `/usr/bin/omarchy` by absolute path. Both units start with that fixed `PATH`. | `setup`, `uninstall`, `daemon/omarchy-buds-osd`, both `.service` files |
+| IPC fails closed | The control socket, its directory and the status file are checked for type, owner and mode `0700`/`0600` before use, on both ends. Commands over 4 KiB, replies over 64 KiB, status over 64 KiB and more than 16 clients are refused. The panel reports "daemon not running" rather than showing stale state. | `daemon/omarchy-buds` (`MAX_*`, `runtime_dir`, `status_path`), `Service.qml` |
+| Nothing the daemon writes is readable by others | `UMask=0077`, `StateDirectoryMode=0700`, `RuntimeDirectoryMode=0700`. | `daemon/omarchy-buds.service` |
+| No hidden verbs | The CLI exposes exactly the verbs listed under Command line. There is no raw-frame passthrough. | `daemon/omarchy-buds` (`cli`) |
+| Sandboxed services | `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, empty `CapabilityBoundingSet`, `RestrictNamespaces`, `LockPersonality`, `SystemCallArchitectures=native`, the `ProtectKernel*` set, and `RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH` (the OSD watcher: `AF_UNIX` only). | both `.service` files |
+| Install never overwrites what it cannot prove is its own | Every target is preflighted; symlinks, directories and unrelated files are refused. Installed files are hashed into a manifest, staged, then published, and a failed service activation rolls back to the previous files. | `setup` |
+| Removal takes only what setup installed | Files are removed only when their hash matches the manifest or the current source; anything else is reported and left in place. | `uninstall` |
+| No network, no sudo, no user config edits | Nothing in the tree opens a network socket, escalates, or writes outside its own state and runtime directories. The one package it may add is `python-gobject`, through `omarchy pkg add`, and only if `gi` is missing. | whole tree |
 
 ## Keyboard
 
@@ -237,7 +256,9 @@ The panel itself answers `omarchy-shell buds open|close|toggle|noise|status`.
 | Setting | Default | Notes |
 |---------|---------|-------|
 | Hide when disconnected | on | Leaves the bar entirely rather than sitting there with nothing to say. |
-| Path to omarchy-buds | empty | Leave empty to find it on `PATH`. |
+
+The panel always runs `/usr/bin/python3 -I ~/.local/bin/omarchy-buds`; there
+is deliberately no setting that points it elsewhere.
 
 ## Icon
 

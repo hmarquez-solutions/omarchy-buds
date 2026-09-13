@@ -6,6 +6,9 @@
 
 set -euo pipefail
 
+# Fixed tool paths, as in setup.
+export PATH=/usr/bin:/bin
+
 root=$(cd "$(dirname "$0")" && pwd)
 bin="$HOME/.local/bin"
 units="$HOME/.config/systemd/user"

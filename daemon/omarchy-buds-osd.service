@@ -11,6 +11,29 @@ ExecStart=%h/.local/bin/omarchy-buds-osd
 # restarts, and the watcher must come back with it.
 Restart=always
 RestartSec=3
+# The watcher only ever runs /usr/bin/pactl and /usr/bin/omarchy-osd; the PATH it
+# starts with is fixed rather than inherited from the session.
+Environment=PATH=/usr/bin:/bin
+
+# Same sandbox as the daemon, minus Bluetooth: it reads PipeWire events and
+# calls the shell's OSD over local sockets, and writes nothing.
+UMask=0077
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
 
 [Install]
 WantedBy=graphical-session.target

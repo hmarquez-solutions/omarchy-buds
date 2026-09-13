@@ -33,7 +33,10 @@ Item {
   property string lastError: ""
   property string actionStatus: ""
 
-  readonly property string ctlPath: String(setting("ctlPath", "") || "omarchy-buds")
+  // Fixed interpreter and script path, never a PATH lookup: the CLI is what
+  // carries a click to the daemon, so nothing in the session may redirect it.
+  readonly property string interpreter: "/usr/bin/python3"
+  readonly property string ctlPath: Quickshell.env("HOME") + "/.local/bin/omarchy-buds"
   readonly property bool busy: commandProcess.running
   // The daemon publishes here on change, so there is nothing to poll.
   readonly property string statePath: (Quickshell.env("XDG_STATE_HOME")
@@ -67,6 +70,18 @@ Item {
 
   function can(feature) {
     return supports && supports[feature] === true
+  }
+
+  // The CLI's whole environment. Only what it needs to find the daemon's
+  // sockets and files; PATH is fixed and Python's own variables never arrive.
+  function cliEnvironment() {
+    var env = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" }
+    var keep = ["HOME", "XDG_RUNTIME_DIR", "XDG_STATE_HOME"]
+    for (var i = 0; i < keep.length; i++) {
+      var value = Quickshell.env(keep[i])
+      if (value) env[keep[i]] = String(value)
+    }
+    return env
   }
 
   function refresh() {
@@ -164,7 +179,7 @@ Item {
     _commandTimedOut = false
     root[field] = optimistic
     settleTimer.restart()
-    commandProcess.command = [ctlPath].concat(argv)
+    commandProcess.command = [interpreter, "-I", ctlPath].concat(argv)
     commandTimeoutTimer.restart()
     commandProcess.running = true
   }
@@ -263,6 +278,10 @@ Item {
     id: commandProcess
     running: false
     command: []
+    // Do not inherit the shell's environment: a PATH shadow or PYTHONPATH in the
+    // session must not pick the interpreter or preload modules into the CLI.
+    clearEnvironment: true
+    environment: root.cliEnvironment()
     stderr: SplitParser {
       // Emit each OS read so Quickshell never accumulates an unbounded stderr buffer.
       splitMarker: ""

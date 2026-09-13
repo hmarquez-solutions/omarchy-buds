@@ -17,17 +17,23 @@
 
 set -uo pipefail
 
+# Fixed tool paths. This runs unattended for the whole session, so nothing in
+# the inherited environment may choose which pactl or omarchy-osd it executes.
+export PATH=/usr/bin:/bin
+pactl=/usr/bin/pactl
+osd=/usr/bin/omarchy-osd
+
 last=""
 
 emit() {
   local silent="${1:-0}"
   local sink pct muted icon key volline
-  sink="$(pactl get-default-sink 2>/dev/null)" || return 0
+  sink="$("$pactl" get-default-sink 2>/dev/null)" || return 0
   [[ -n $sink ]] || return 0
-  volline="$(pactl get-sink-volume "$sink" 2>/dev/null | head -1)" || return 0
+  volline="$("$pactl" get-sink-volume "$sink" 2>/dev/null | head -1)" || return 0
   pct="$(grep -oE '[0-9]+%' <<<"$volline" | head -1 | tr -d '%')"
   [[ -n $pct ]] || return 0
-  if [[ "$(pactl get-sink-mute "$sink" 2>/dev/null)" == *yes ]]; then muted=1; else muted=0; fi
+  if [[ "$("$pactl" get-sink-mute "$sink" 2>/dev/null)" == *yes ]]; then muted=1; else muted=0; fi
 
   key="$sink:$pct:$muted"
   [[ $key == "$last" ]] && return 0
@@ -46,18 +52,18 @@ emit() {
   else
     icon="volume-high"
   fi
-  omarchy-osd -i "$icon" -p "$pct" || true
+  "$osd" -i "$icon" -p "$pct" || true
 }
 
-command -v pactl >/dev/null 2>&1 || { echo "omarchy-buds-osd: pactl not found" >&2; exit 1; }
-command -v omarchy-osd >/dev/null 2>&1 || { echo "omarchy-buds-osd: omarchy-osd not found" >&2; exit 1; }
+[[ -x $pactl ]] || { echo "omarchy-buds-osd: $pactl not found" >&2; exit 1; }
+[[ -x $osd ]] || { echo "omarchy-buds-osd: $osd not found" >&2; exit 1; }
 
 # Prime the baseline so startup does not flash an OSD.
 emit 1
 
 # `pactl subscribe` prints a line per event; react to sink events only. If the
 # daemon restarts, subscribe exits and systemd restarts the unit.
-pactl subscribe 2>/dev/null | while read -r line; do
+"$pactl" subscribe 2>/dev/null | while read -r line; do
   case "$line" in
     *"on sink #"*) emit ;;
   esac

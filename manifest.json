@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.hmarquez-solutions.buds",
   "name": "Galaxy Buds",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Hector Marquez",
   "license": "MIT",
   "description": "Samsung Galaxy Buds in the Omarchy bar: per-bud and case battery, noise controls, ambient volume, voice detect, touch lock, equalizer and find-my-buds.",
@@ -19,8 +19,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "hideWhenDisconnected": true,
-      "ctlPath": ""
+      "hideWhenDisconnected": true
     },
     "schema": [
       {
@@ -28,13 +27,6 @@
         "type": "boolean",
         "label": "Hide the icon when no Galaxy Buds are connected",
         "defaultValue": true
-      },
-      {
-        "key": "ctlPath",
-        "type": "path",
-        "label": "Path to omarchy-buds",
-        "description": "Leave empty to find omarchy-buds on PATH.",
-        "defaultValue": ""
       }
     ]
   }

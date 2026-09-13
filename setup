@@ -4,6 +4,12 @@
 
 set -euo pipefail
 
+# Fixed tool paths: the inherited PATH must not choose which systemctl, install,
+# python3 or omarchy this run executes.
+export PATH=/usr/bin:/bin
+python=/usr/bin/python3
+omarchy=/usr/bin/omarchy
+
 root=$(cd "$(dirname "$0")" && pwd)
 bin="$HOME/.local/bin"
 units="$HOME/.config/systemd/user"
@@ -66,6 +72,7 @@ trap finish EXIT
 mkdir -p -- "$bin" "$units" "$state"
 chmod 700 -- "$state"
 
+[[ -x "$python" ]] || die "$python is required; the daemon runs under it in isolated mode"
 if ! command -v sha256sum >/dev/null 2>&1; then
   die "sha256sum is required for collision-safe updates"
 fi
@@ -155,8 +162,9 @@ for i in "${!targets[@]}"; do
 done
 
 # Omarchy ships python-gobject in its base install; this only matters on a trimmed system.
-if ! python3 -c 'import gi' 2>/dev/null; then
-  omarchy pkg add python-gobject
+if ! "$python" -I -c 'import gi' 2>/dev/null; then
+  [[ -x "$omarchy" ]] || die "$omarchy not found; install python-gobject and rerun"
+  "$omarchy" pkg add python-gobject
 fi
 
 systemctl --user daemon-reload

@@ -6,7 +6,12 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/omarchy-buds daemon
+# A fixed interpreter in isolated mode: -I ignores PYTHONPATH/PYTHONHOME and the
+# user site directory, and keeps the script's own directory off sys.path, so
+# nothing in the session environment can choose the interpreter or preload code.
+ExecStart=/usr/bin/python3 -I %h/.local/bin/omarchy-buds daemon
+# The daemon spawns nothing, but the environment it starts with is still fixed.
+Environment=PATH=/usr/bin:/bin
 Restart=on-failure
 RestartSec=5
 
