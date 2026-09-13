@@ -72,11 +72,40 @@ class FrameParserTests(unittest.TestCase):
         parsed = list(ob.FrameParser().feed(bytes(frame) + good))
         self.assertEqual(parsed, [(ob.Msg.AMBIENT_VOLUME, b"\x02", False)])
 
+    def test_fake_som_in_garbage_resyncs_when_a_real_frame_arrives_later(self):
+        # Garbage whose fake SOM claims a large size must not stall the parser:
+        # the good frame is recovered even though it arrives in a later read.
+        garbage = bytes([ob.SOM, 0xFF, 0x03, 0x55, 0x66])  # size 1023, never completes
+        good = ob.encode(ob.Msg.AMBIENT_VOLUME, b"\x02")
+        parser = ob.FrameParser()
+        self.assertEqual(list(parser.feed(garbage)), [])
+        self.assertEqual(list(parser.feed(good[:4])), [])
+        self.assertEqual(list(parser.feed(good[4:])), [(ob.Msg.AMBIENT_VOLUME, b"\x02", False)])
+        self.assertEqual(parser.take_skipped(), len(garbage))
+
     def test_response_bit_is_reported(self):
         frame = bytearray(ob.encode(ob.Msg.ACK, b"\x78\x01"))
         frame[2] |= 0x10
         parsed = list(ob.FrameParser().feed(bytes(frame)))
         self.assertEqual(parsed, [(ob.Msg.ACK, b"\x78\x01", True)])
+
+
+class HeaderFlagTests(unittest.TestCase):
+    def test_sequence_and_vendor_bits_in_the_header_are_accepted(self):
+        # Bits 14-15 (sequence) and 10-11 are set by the Buds3 family. All must parse.
+        for flags in (0x0000, 0x4000, 0x8000, 0xC000, 0x0400, 0x0800, 0xD400):
+            frame = bytearray(ob.encode(ob.Msg.STATUS_UPDATED, bytes(8)))
+            header = int.from_bytes(frame[1:3], "little") | flags
+            frame[1:3] = header.to_bytes(2, "little")
+            out = list(ob.FrameParser().feed(bytes(frame)))
+            self.assertEqual([(m, len(p)) for m, p, _ in out], [(ob.Msg.STATUS_UPDATED, 8)], hex(flags))
+
+    def test_response_bit_survives_alongside_sequence_bits(self):
+        frame = bytearray(ob.encode(ob.Msg.MANAGER_INFO, b"\x00", 0x1000))
+        header = int.from_bytes(frame[1:3], "little") | 0xC000
+        frame[1:3] = header.to_bytes(2, "little")
+        (msg_id, payload, is_response), = ob.FrameParser().feed(bytes(frame))
+        self.assertEqual((msg_id, payload, is_response), (ob.Msg.MANAGER_INFO, b"\x00", True))
 
 
 class IdentifyTests(unittest.TestCase):

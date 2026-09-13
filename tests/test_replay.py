@@ -150,6 +150,66 @@ class ReplayInvariantTests(unittest.TestCase):
             self.assertEqual(parser.take_skipped(), 0, path)
 
 
+def raw_fixture():
+    with open(os.path.join(HERE, "fixtures", "buds4pro-raw-1.hex")) as fh:
+        return bytes.fromhex("".join(line.strip() for line in fh if not line.startswith("#")))
+
+
+class RawStreamTests(unittest.TestCase):
+    """The bytes as they came off the RFCOMM socket, CRCs and header flags intact."""
+
+    def frames(self, chunk=None, seed=1):
+        raw = raw_fixture()
+        parser = ob.FrameParser()
+        out = []
+        if chunk is None:
+            out.extend(parser.feed(raw))
+        else:
+            rng = random.Random(seed)
+            i = 0
+            while i < len(raw):
+                n = rng.randint(1, chunk)
+                out.extend(parser.feed(raw[i:i + n]))
+                i += n
+        return out, parser.take_skipped()
+
+    def test_every_frame_parses_and_nothing_is_skipped(self):
+        out, skipped = self.frames()
+        self.assertEqual(len(out), 27)
+        self.assertEqual(skipped, 0)
+        ids = [m for m, _, _ in out]
+        self.assertIn(ob.Msg.EXTENDED_STATUS_UPDATED, ids)
+        self.assertIn(ob.Msg.STATUS_UPDATED, ids)
+        self.assertIn(ob.Msg.NOISE_CONTROLS_UPDATE, ids)
+
+    def test_header_sequence_bits_are_not_a_reason_to_reject(self):
+        # The device cycles bits 14-15 through 0..3; only a quarter of the frames
+        # have them clear. A parser that rejects them loses the other three quarters.
+        raw = raw_fixture()
+        seq = []
+        i = 0
+        while i < len(raw):
+            header = int.from_bytes(raw[i + 1:i + 3], "little")
+            seq.append(header >> 14)
+            i += 3 + (header & 0x3FF) + 1
+        self.assertEqual(sorted(set(seq)), [0, 1, 2, 3])
+        out, _ = self.frames()
+        self.assertEqual(len(out), len(seq))
+
+    def test_fragmented_reads_yield_the_same_frames(self):
+        whole, _ = self.frames()
+        for chunk, seed in ((1, 1), (7, 2), (64, 3), (1000, 4)):
+            out, skipped = self.frames(chunk, seed)
+            self.assertEqual(out, whole, f"chunk<={chunk}")
+            self.assertEqual(skipped, 0)
+
+    def test_response_flag_is_bit_12(self):
+        out, _ = self.frames()
+        responses = {m for m, _, r in out if r}
+        self.assertIn(ob.Msg.MANAGER_INFO, responses)
+        self.assertNotIn(ob.Msg.EXTENDED_STATUS_UPDATED, responses)
+
+
 def state_after(path, prefix_hex, occurrence=1, model="Buds4 Pro"):
     """Replay `path` up to and including the n-th received frame whose payload
     starts with `prefix_hex`; return the state then."""

@@ -295,7 +295,10 @@ GalaxyBudsClient.
 (`tests/fixtures/*.log`) through the decoder exactly as the daemon would, checks
 a set of invariants after every frame (a bud out of the case is never charging,
 the case has a level only while a bud is docked, every status frame publishes),
-and pins the behaviour that was fixed from those captures. To add a capture,
+and pins the behaviour that was fixed from those captures.
+`tests/fixtures/buds4pro-raw-1.hex` is the byte stream as it came off the
+socket, CRCs and header flags intact; the parser must yield every frame from it
+however the reads are fragmented. To add a capture,
 run `omarchy-buds daemon --debug` in the foreground, move the buds around, and
 keep the `<<`, `>>` and link lines; the fixture headers show the format.
 

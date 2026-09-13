@@ -139,6 +139,29 @@ class FrameParser:
         n, self.skipped = self.skipped, 0
         return n
 
+    @staticmethod
+    def _frame_len_at(buf, pos):
+        """Length of the complete, valid frame starting at buf[pos], else None."""
+        if pos + 4 > len(buf) or buf[pos] != SOM:
+            return None
+        size = int.from_bytes(buf[pos + 1:pos + 3], "little") & 0x3FF
+        total = 3 + size + 1
+        if size < 3 or pos + total > len(buf) or buf[pos + total - 1] != EOM:
+            return None
+        body = bytes(buf[pos + 3:pos + total - 3])
+        if crc16(body) != int.from_bytes(buf[pos + total - 3:pos + total - 1], "little"):
+            return None
+        return total
+
+    def _next_valid_frame(self, start):
+        """Offset of the first complete, valid frame at or after `start`, else None."""
+        pos = self.buf.find(SOM, start)
+        while pos >= 0:
+            if self._frame_len_at(self.buf, pos) is not None:
+                return pos
+            pos = self.buf.find(SOM, pos + 1)
+        return None
+
     def feed(self, data: bytes):
         self.buf.extend(data)
         while self.buf:
@@ -155,14 +178,25 @@ class FrameParser:
             header = int.from_bytes(self.buf[1:3], "little")
             size = header & 0x3FF
             total = 3 + size + 1
-            # Only bits 12 (response) and 13 (fragment) sit above the 10-bit size;
-            # anything else set means this SOM byte was payload, not a frame start.
-            if size < 3 or header & 0xCC00:
+            # Above the 10-bit size: bit 12 is "response", bit 13 "fragment", and
+            # the Buds3 family also uses bits 14-15 as a rolling sequence counter
+            # and sets bits 10-11 on some frames. None of that decides whether
+            # this is a frame; the EOM byte and the CRC do. Rejecting headers
+            # with the sequence bits set silently dropped three frames in four.
+            if size < 3:
                 self.skipped += 1
                 del self.buf[:1]
                 continue
             if len(self.buf) < total:
-                return
+                # Incomplete. Either a real frame still arriving, or a SOM byte
+                # inside garbage whose bogus size would stall us. If a complete,
+                # valid frame already sits further along, it was the latter.
+                alt = self._next_valid_frame(1)
+                if alt is None:
+                    return
+                self.skipped += alt
+                del self.buf[:alt]
+                continue
             frame = bytes(self.buf[:total])
             # The CRC travels little-endian right after the payload.
             if frame[-1] != EOM or crc16(frame[3:-3]) != int.from_bytes(frame[-3:-1], "little"):
