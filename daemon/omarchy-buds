@@ -227,6 +227,7 @@ class BudsState:
         self.left = _bud()
         self.right = _bud()
         self.case = {"level": None, "charging": False}
+        self._case_raw = 255
         self.noise_mode = None
         self.ambient_volume = None
         self.extra_high_ambient = False
@@ -275,7 +276,17 @@ class BudsState:
     def _finish_levels(self, left_raw, right_raw, case_raw) -> None:
         self.left["level"] = self._level(left_raw, self.left["placement"])
         self.right["level"] = self._level(right_raw, self.right["placement"])
-        self.case["level"] = None if case_raw > 100 else case_raw
+        self._case_raw = case_raw
+        self._finish_case()
+
+    def _finish_case(self) -> None:
+        """The buds read the case over the charging contacts, so with both buds
+        out the case byte is 0 (or a stale value), not a measurement. A charging
+        bud is docked whatever its placement byte says."""
+        docked = any(
+            b["placement"] in ("case", "case_closed") or b["charging"] for b in (self.left, self.right)
+        )
+        self.case["level"] = self._case_raw if docked and 0 <= self._case_raw <= 100 else None
 
     def apply_status(self, p: bytes) -> None:
         """STATUS_UPDATED: the short battery/placement heartbeat."""
@@ -343,6 +354,30 @@ class BudsState:
         for bud in (self.left, self.right):
             if bud["charging"] and bud["placement"] in ("idle", "disconnected"):
                 bud["placement"] = "case"
+        # Charging bits arrive after the levels, and they decide whether a bud is docked.
+        self._finish_case()
+
+    def apply_noise_update(self, p: bytes) -> None:
+        """NOISE_CONTROLS_UPDATE: the mode, and on the Buds3 family the placement.
+
+        Seen live on the Buds4 Pro: a bud leaving the ear or entering the case is
+        announced first (sometimes only) by this frame, with the same placement
+        nibbles as the status frames in byte 1, e.g. `02 31 ...` for ambient with
+        the left bud in the case. The buds also drop ambient/ANC to off here when
+        a bud comes out, which is the mode change the byte 0 reports.
+        """
+        if not p:
+            return
+        self.noise_mode = NOISE_MODES.get(p[0], self.noise_mode)
+        if len(p) < 2 or (p[1] >> 4) not in PLACEMENTS or (p[1] & 0x0F) not in PLACEMENTS:
+            return
+        self._apply_placement(p[1])
+        for bud in (self.left, self.right):
+            if bud["placement"] == "disconnected":
+                bud["level"] = None
+            elif bud["charging"] and bud["placement"] in ("idle", "disconnected"):
+                bud["placement"] = "case"
+        self._finish_case()
 
     def apply_ack(self, p: bytes) -> None:
         if len(p) < 2:
@@ -933,8 +968,7 @@ class Daemon:
         elif msg_id == Msg.EXTENDED_STATUS_UPDATED:
             s.apply_extended_status(payload)
         elif msg_id == Msg.NOISE_CONTROLS_UPDATE:
-            if payload:
-                s.noise_mode = NOISE_MODES.get(payload[0], s.noise_mode)
+            s.apply_noise_update(payload)
         elif msg_id == Msg.AMBIENT_VOLUME:
             if payload:
                 s.ambient_volume = payload[0]

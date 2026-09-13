@@ -43,12 +43,19 @@ request.
 
 ## Known limitations
 
+- **The case level shows as `—` with "Dock a bud to read" while both buds are
+  out of the case.** The buds read the case battery over the charging contacts,
+  so with nothing docked the firmware sends 0 rather than a measurement. The
+  Wearable app hides the case in the same situation. Drop one bud in and the
+  reading appears within a second.
 - **Changing the noise mode on the buds does not update the panel live, on the
   Buds4 Pro.** Panel → buds works and is acknowledged; buds → panel does not.
   When you pinch-and-hold to cycle the mode, this firmware sends no
   notification over the control link — no `NOISE_CONTROLS_UPDATE`, no fresh
   extended status, and no gesture frame either; the only unsolicited traffic is
-  the head-tracking sensor stream. There is also no request that reads the
+  the head-tracking sensor stream. (It does send `NOISE_CONTROLS_UPDATE` when a
+  bud leaves the ear or enters the case, carrying the new placement, and the
+  panel uses that for live bud placement.) There is also no request that reads the
   current mode back, so the panel cannot poll for it, and the one thing that
   would force a fresh status — dropping and reopening the link — takes the audio
   profile down with it, which is not a trade worth making for a status refresh.

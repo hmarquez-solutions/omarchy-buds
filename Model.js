@@ -215,8 +215,10 @@ function budMeta(bud) {
   return PLACEMENT_LABELS[bud.placement] || ""
 }
 
+// The buds only read the case while one of them is docked in it.
 function caseMeta(c) {
-  return c && c.charging ? "Charging" : ""
+  if (!c || c.level === LEVEL_UNKNOWN) return "Dock a bud to read"
+  return c.charging ? "Charging" : ""
 }
 
 function noiseModeName(mode) {

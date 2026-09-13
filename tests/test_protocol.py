@@ -226,7 +226,8 @@ class DecoderTests(unittest.TestCase):
     def test_buds3_family_extended_status(self):
         s = self.state_for("Buds4 Pro")
         s.apply_extended_status(buds3_extended_payload())
-        self.assertEqual((s.left["level"], s.right["level"], s.case["level"]), (87, 91, 64))
+        # Both buds worn, so the case byte (64) is not a live reading.
+        self.assertEqual((s.left["level"], s.right["level"], s.case["level"]), (87, 91, None))
         self.assertEqual(s.left["placement"], "wearing")
         self.assertEqual(s.noise_mode, "anc")
         self.assertEqual(s.ambient_volume, 1)
@@ -241,6 +242,42 @@ class DecoderTests(unittest.TestCase):
         s.apply_extended_status(buds3_extended_payload(**{"6": 0x33, "42": 0x15}))
         self.assertTrue(s.left["charging"] and s.right["charging"] and s.case["charging"])
         self.assertEqual(s.left["placement"], "case")
+
+    def test_case_level_unknown_unless_a_bud_is_docked(self):
+        s = self.state_for("Buds4 Pro")
+        # Both buds worn: the case byte is whatever the buds last saw, or 0.
+        s.apply_extended_status(buds3_extended_payload(**{"7": 0}))
+        self.assertIsNone(s.case["level"])
+        s.apply_extended_status(buds3_extended_payload(**{"7": 64}))
+        self.assertIsNone(s.case["level"])
+        # Left bud in the case: the reading is live.
+        s.apply_extended_status(buds3_extended_payload(**{"6": 0x31, "7": 64}))
+        self.assertEqual(s.case["level"], 64)
+        # Closed case counts as docked; out-of-range stays unknown.
+        s.apply_extended_status(buds3_extended_payload(**{"6": 0x14, "7": 100}))
+        self.assertEqual(s.case["level"], 100)
+        s.apply_extended_status(buds3_extended_payload(**{"6": 0x31, "7": 255}))
+        self.assertIsNone(s.case["level"])
+
+    def test_noise_update_carries_placement_on_buds3(self):
+        # Payloads captured live from a Buds4 Pro while moving the left bud.
+        s = self.state_for("Buds4 Pro")
+        s.apply_extended_status(buds3_extended_payload())
+        s.apply_noise_update(bytes.fromhex("02 31 01 00 09 09 02 02 02 02 02"))
+        self.assertEqual(s.noise_mode, "ambient")
+        self.assertEqual((s.left["placement"], s.right["placement"]), ("case", "wearing"))
+        self.assertEqual(s.case["level"], 64)
+        s.apply_noise_update(bytes.fromhex("00 22 01 00 09 09 02 02 02 02 02"))
+        self.assertEqual(s.noise_mode, "off")
+        self.assertEqual((s.left["placement"], s.right["placement"]), ("idle", "idle"))
+        self.assertIsNone(s.case["level"])
+        # A one-byte update (older models) still only sets the mode.
+        s.apply_noise_update(bytes([1]))
+        self.assertEqual(s.noise_mode, "anc")
+        self.assertEqual(s.left["placement"], "idle")
+        # Garbage in the placement byte is ignored.
+        s.apply_noise_update(bytes([2, 0xF9]))
+        self.assertEqual(s.left["placement"], "idle")
 
     def test_disconnected_bud_has_no_level(self):
         s = self.state_for("Buds4 Pro")

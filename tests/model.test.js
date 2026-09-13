@@ -100,6 +100,9 @@ test("unknown modes and presets are dropped", () => {
 test("meta text prefers charging over placement", () => {
   assert.equal(Model.budMeta({ level: 50, charging: true, placement: "case" }), "Charging")
   assert.equal(Model.budMeta({ level: 50, charging: false, placement: "case" }), "In case")
+  assert.equal(Model.caseMeta({ level: 64, charging: true }), "Charging")
+  assert.equal(Model.caseMeta({ level: 64, charging: false }), "")
+  assert.equal(Model.caseMeta({ level: Model.LEVEL_UNKNOWN, charging: false }), "Dock a bud to read")
   assert.equal(Model.budMeta({ level: 50, charging: false, placement: "wearing" }), "In ear")
   assert.equal(Model.budMeta({ level: 50, charging: false, placement: "disconnected" }), "")
 })
