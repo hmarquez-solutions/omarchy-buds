@@ -148,7 +148,8 @@ to `~/.local/bin/omarchy-buds`, installs `omarchy-buds.service` and starts it.
 It preflights every fixed target, refuses symlinks/directories and unrelated
 existing files, and records hashes of installed files so later updates can be
 rolled back if service activation fails. Files from an install that predates
-the manifest are recognised by content. An unattended update that would replace
+the manifest are recognised only if their hash is in `daemon/shipped.sha256`,
+the list of every version ever shipped. An unattended update that would replace
 a file it cannot prove is its own must be run with `OMARCHY_BUDS_FORCE=1`.
 The icon stays hidden until Galaxy Buds are connected. To keep it visible:
 
@@ -182,13 +183,15 @@ omarchy plugin remove io.github.hmarquez-solutions.buds
 ```
 
 `uninstall` stops and disables both services, removes only files it can prove
-are its own, and deletes the state directory. The same by hand:
+are its own, and removes the state directory's known files by name, then the
+directory. Nothing is deleted recursively. The same by hand:
 
 ```bash
 systemctl --user disable --now omarchy-buds.service omarchy-buds-osd.service
 rm -f ~/.local/bin/omarchy-buds ~/.local/bin/omarchy-buds-osd
 rm -f ~/.config/systemd/user/omarchy-buds.service ~/.config/systemd/user/omarchy-buds-osd.service
-rm -rf ~/.local/state/omarchy-buds
+rm -f ~/.local/state/omarchy-buds/status.json ~/.local/state/omarchy-buds/install-manifest
+rmdir ~/.local/state/omarchy-buds
 systemctl --user daemon-reload
 omarchy plugin remove io.github.hmarquez-solutions.buds
 ```
@@ -207,8 +210,8 @@ lives:
 | Nothing the daemon writes is readable by others | `UMask=0077`, `StateDirectoryMode=0700`, `RuntimeDirectoryMode=0700`. | `daemon/omarchy-buds.service` |
 | No hidden verbs | The CLI exposes exactly the verbs listed under Command line. There is no raw-frame passthrough. | `daemon/omarchy-buds` (`cli`) |
 | Sandboxed services | `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, empty `CapabilityBoundingSet`, `RestrictNamespaces`, `LockPersonality`, `SystemCallArchitectures=native`, the `ProtectKernel*` set, and `RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH` (the OSD watcher: `AF_UNIX` only). | both `.service` files |
-| Install never overwrites what it cannot prove is its own | Every target is preflighted; symlinks, directories and unrelated files are refused. Installed files are hashed into a manifest, staged, then published, and a failed service activation rolls back to the previous files. | `setup` |
-| Removal takes only what setup installed | Files are removed only when their hash matches the manifest or the current source; anything else is reported and left in place. | `uninstall` |
+| Install never overwrites what it cannot prove is its own | Every target is preflighted; symlinks, directories and unrelated files are refused. A pre-existing file is accepted only if its hash is in the install manifest, matches the current source, or is in `daemon/shipped.sha256`, the closed list of every version ever shipped. Installed files are hashed into the manifest, staged, then published, and a failed service activation rolls back to the previous files. | `setup`, `daemon/shipped.sha256` |
+| Removal takes only what setup installed, never recursively | Files are removed only when their hash is proven by the same three sources; anything else is reported and left in place. The state directory's known files are removed by name, then `rmdir`. | `uninstall` |
 | No network, no sudo, no user config edits | Nothing in the tree opens a network socket, escalates, or writes outside its own state and runtime directories. The one package it may add is `python-gobject`, through `omarchy pkg add`, and only if `gi` is missing. | whole tree |
 
 ## Keyboard
@@ -269,7 +272,7 @@ with:
 
 ```bash
 magick assets/buds4-pro-black-cutout.png -alpha extract -compress none pgm:- \
-  | python3 tools/trace-icon.py > BudsOutline.js
+  | /usr/bin/python3 -I tools/trace-icon.py > BudsOutline.js
 ```
 
 ## Tests

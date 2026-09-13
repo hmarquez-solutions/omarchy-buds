@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Trace the Buds4 Pro cut-out into the outline the bar and panel draw.
 
     magick assets/buds4-pro-black-cutout.png -alpha extract -compress none pgm:- \

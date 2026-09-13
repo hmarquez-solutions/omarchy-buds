@@ -1,0 +1,16 @@
+# sha256 of every version of each installed file this plugin has ever shipped.
+# setup and uninstall treat a file at one of the fixed install paths as ours
+# only if its hash is recorded here, in the install manifest, or matches the
+# current source. Append a line whenever a shipped file changes; never remove one.
+003e59849511f09d7f5e2866d1475306b34eb29044b1819339132ddcd6bd37e2  omarchy-buds.service
+0fbd166fe39733bc3baa3b69e0490d21d4048c42c6c369fea5f4338b3fa46c7b  omarchy-buds-osd
+0ffd7701f0f883fcba32c33555f9531d92392658fec325a36a35299378f4df2b  omarchy-buds-osd
+12c0905fda3e6ca23c45fef31876d106e1b77ea8600573478330cdcd78da52f6  omarchy-buds
+257daabab7b73e451df4830fc28fb22ea65a01caba842f46eaddc6df32622b9e  omarchy-buds
+65119ab14f9e4567fe8796ab69ba383488503ca3fcee04794eec0d4163e0eeed  omarchy-buds-osd.service
+78bf6fc510a440648e567b61a2bf1787c989344822b1e4659e6e71a2b7e74d0a  omarchy-buds.service
+82f345ad358ec58a05389e2434dbe9657950a5d80e12bf2524337a8658da9d6d  omarchy-buds.service
+bf8a5ad859f5bb3a47d0726be90d55e434868af2d33f2bf17dd0524ccf41263a  omarchy-buds
+cf90d851301cde59442a0e52ab36d5738ad93437ad474e70ce5e31f1ec5cf638  omarchy-buds-osd.service
+e91dd64345250f9bc7410db47e66fca241f8db124f8efa017c6294f73d8bc412  omarchy-buds
+f8acd3743b40a2c7db6a68d95ed17cae66968f36c896bb5c239829ec700c5ad6  omarchy-buds

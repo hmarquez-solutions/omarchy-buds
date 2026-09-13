@@ -31,7 +31,11 @@ die() {
 
 cleanup() {
   [[ -z "$tmp_target" ]] || rm -f -- "$tmp_target"
-  rm -rf -- "$stage"
+  # The stage holds only what this run put there; remove it by name.
+  rm -f -- "$stage"/bin/omarchy-buds "$stage"/bin/omarchy-buds-osd \
+    "$stage"/unit/omarchy-buds.service "$stage"/unit/omarchy-buds-osd.service \
+    "$stage"/install-manifest "$stage"/backup-0 "$stage"/backup-1 "$stage"/backup-2 "$stage"/backup-3
+  rmdir -- "$stage"/bin "$stage"/unit "$stage" 2>/dev/null || true
 }
 
 rollback() {
@@ -102,12 +106,13 @@ manifest_hash() {
   awk -v label="$1" '$2 == label { print $1; exit }' "$manifest"
 }
 
-# Installs made before the manifest existed have nothing to prove ownership
-# with except their content: every file this plugin has ever shipped names
-# itself, and an unrelated file at these exact paths that also mentions
-# omarchy-buds is not a realistic collision.
-looks_like_ours() {
-  grep -q -m1 -F 'omarchy-buds' -- "$1" 2>/dev/null
+# Installs made before the manifest existed are recognised only by exact
+# content: daemon/shipped.sha256 lists the hash of every version of each file
+# this plugin has ever installed. Anything else at these paths is not ours.
+shipped="$root/daemon/shipped.sha256"
+shipped_hash() {
+  [[ -f "$shipped" && ! -L "$shipped" ]] || return 1
+  awk -v h="$1" -v n="$2" '$1 == h && $2 == n { found = 1 } END { exit !found }' "$shipped"
 }
 
 declare -a collisions=()
@@ -121,7 +126,7 @@ for i in "${!targets[@]}"; do
   [[ "$current_hash" == "$source_hash" ]] && continue
   owned_hash=$(manifest_hash "${labels[$i]}" || true)
   [[ -n "$owned_hash" && "$owned_hash" == "$current_hash" ]] && continue
-  [[ -z "$owned_hash" ]] && looks_like_ours "$target" && continue
+  shipped_hash "$current_hash" "$(basename -- "$target")" && continue
   collisions+=("$target")
 done
 

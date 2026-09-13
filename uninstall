@@ -1,8 +1,9 @@
 #!/bin/bash
 # Undo everything setup installed: the two user services, the two scripts in
 # ~/.local/bin, and the state directory. Files are removed only when they are
-# proven to be ours (manifest hash, current source hash, or a legacy install
-# that names omarchy-buds); anything else is reported and left alone.
+# proven to be ours (manifest hash, current source hash, or the hash of a
+# version this plugin shipped before the manifest existed); anything else is
+# reported and left alone. Nothing is deleted recursively.
 
 set -euo pipefail
 
@@ -43,6 +44,12 @@ file_hash() {
   sha256sum -- "$1" | awk '{print $1}'
 }
 
+shipped="$root/daemon/shipped.sha256"
+shipped_hash() {
+  [[ -f "$shipped" && ! -L "$shipped" ]] || return 1
+  awk -v h="$1" -v n="$2" '$1 == h && $2 == n { found = 1 } END { exit !found }' "$shipped"
+}
+
 ours() {
   local target=$1 label=$2 source=$3 current owned
   [[ -f "$target" && ! -L "$target" ]] || return 1
@@ -50,7 +57,7 @@ ours() {
   owned=$(manifest_hash "$label" || true)
   [[ -n "$owned" && "$owned" == "$current" ]] && return 0
   [[ -f "$source" && "$(file_hash "$source")" == "$current" ]] && return 0
-  [[ -z "$owned" ]] && grep -q -m1 -F 'omarchy-buds' -- "$target" 2>/dev/null && return 0
+  shipped_hash "$current" "$(basename -- "$target")" && return 0
   return 1
 }
 
@@ -69,8 +76,14 @@ done
 
 systemctl --user daemon-reload
 
+# The state directory holds exactly what the daemon and setup put there. Remove
+# those by name and then the directory itself; never delete recursively.
 if [[ -d "$state" && ! -L "$state" ]]; then
-  rm -rf -- "$state"
+  for f in "$state/status.json" "$state/install-manifest" "$state/install-manifest.tmp" \
+           "$state"/.status.????????????????????????; do
+    [[ -f "$f" && ! -L "$f" ]] && rm -f -- "$f"
+  done
+  rmdir -- "$state" 2>/dev/null || kept+=("$state (not empty)")
 fi
 
 if ((${#kept[@]})); then
