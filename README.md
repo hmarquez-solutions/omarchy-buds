@@ -48,24 +48,13 @@ request.
   the firmware sends 0 rather than a measurement, and the Wearable app hides the
   case in the same situation. Drop a bud in and the last live reading appears,
   refreshed as soon as the buds send a status frame with a new one.
-- **Changing the noise mode on the buds does not update the panel live, on the
-  Buds4 Pro.** Panel → buds works and is acknowledged; buds → panel does not.
-  When you pinch-and-hold to cycle the mode, this firmware sends no
-  notification over the control link — no `NOISE_CONTROLS_UPDATE`, no fresh
-  extended status, and no gesture frame either; the only unsolicited traffic is
-  the head-tracking sensor stream. (It does send `NOISE_CONTROLS_UPDATE` when a
-  bud leaves the ear or enters the case. The panel uses its placement byte for
-  live bud placement, but not its mode byte, which reports the buds' temporary
-  auto-off while nothing is worn rather than the mode you chose.) There is also
-  no request that reads the current mode back, so the panel cannot poll for it,
-  and the one thing that
-  would force a fresh status — dropping and reopening the link — takes the audio
-  profile down with it, which is not a trade worth making for a status refresh.
-  The panel corrects itself on the next reconnect. GalaxyBudsClient marks the
-  Buds4 Pro extended status as "not properly implemented" for the same reason.
-  If your model *does* push updates on a pinch (several older ones do), they are
-  handled and the panel keeps up. Reports with a `--debug` frame log from a
-  model that pushes are welcome.
+- **Some placement changes reach the panel a beat late.** The buds announce a
+  bud leaving the ear or entering the case in a noise-controls frame first and a
+  full status frame later, and the case level is read only while a bud is
+  docked, so a dock shows the last live reading until the status frame lands.
+  Pinch-and-hold cycles on the buds are reported live: the frame carries the new
+  mode and a gesture marker. (Earlier releases documented the opposite; the
+  frame parser was dropping three frames in four, see the tests.)
 
 ## Volume OSD
 

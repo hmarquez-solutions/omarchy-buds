@@ -321,6 +321,14 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(s.right["placement"], "wearing")
         self.assertFalse(s.right["charging"])
         self.assertIsNone(s.case["level"])
+        # A pinch-and-hold cycle: byte 6 is the gesture marker, byte 0 the new mode.
+        s.apply_noise_update(bytes.fromhex("01 11 01 00 09 09 01 00 01 02 02"))
+        self.assertEqual(s.noise_mode, "anc")
+        s.apply_noise_update(bytes.fromhex("02 11 01 00 09 09 01 00 02 02 02"))
+        self.assertEqual(s.noise_mode, "ambient")
+        # The same frame from wear detection (byte 6 = 02) leaves the mode alone.
+        s.apply_noise_update(bytes.fromhex("00 11 01 00 09 09 02 00 00 02 02"))
+        self.assertEqual(s.noise_mode, "ambient")
         # A one-byte update (older models, on a pinch) is the mode.
         s.apply_noise_update(bytes([2]))
         self.assertEqual(s.noise_mode, "ambient")

@@ -282,6 +282,19 @@ class ReplayCheckpointTests(unittest.TestCase):
         self.assertEqual(s.noise_mode, "ambient")
         self.assertEqual(self.placements(s), ("wearing", "wearing"))
 
+    def test_pinch_and_hold_cycles_follow_the_gesture_frames(self):
+        # Capture 4: nine holds alternate noise cancelling and ambient; the extended
+        # status at connect said ambient, and the session ends on noise cancelling.
+        replay = Replay()
+        modes = []
+        for ev in events(fixture(4)):
+            replay.feed(ev)
+            if ev[0] == "rx" and ev[1] == ob.Msg.NOISE_CONTROLS_UPDATE:
+                modes.append(replay.state.noise_mode)
+        self.assertEqual(modes, ["anc", "ambient"] * 4 + ["anc"])
+        self.assertEqual(replay.state.noise_mode, "anc")
+        self.assertEqual(self.placements(replay.state), ("wearing", "wearing"))
+
     def test_link_drop_and_reconnect_reports_fresh_state(self):
         # Capture 1 closes the link when both buds are shut in the case, then reconnects.
         replay = Replay()

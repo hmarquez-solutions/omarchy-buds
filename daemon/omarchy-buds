@@ -423,20 +423,28 @@ class BudsState:
     def apply_noise_update(self, p: bytes) -> None:
         """NOISE_CONTROLS_UPDATE: the mode, and on the Buds3 family the placement.
 
-        Seen live on the Buds4 Pro: a bud leaving the ear or entering the case is
-        announced first (sometimes only) by this frame, with the same placement
-        nibbles as the status frames in byte 1, e.g. `02 31 ...` with the left
-        bud in the case. Byte 0 of those frames is not the mode the user chose:
-        it read 00 whenever no bud was in an ear and 02 otherwise, and once stayed
-        00 with both buds back in while ambient sound was audibly on. So a frame
-        that carries placement updates placement only; the mode comes from the
-        extended status and from this daemon's own commands. A one-byte frame,
-        which older models send on a pinch, is the mode.
+        Captured live on a Buds4 Pro (tests/fixtures):
+
+        - A pinch-and-hold cycle sends `01 11 01 00 09 09 01 00 01 02 02` (noise
+          cancelling) or `02 11 ... 01 00 02 02 02` (ambient): byte 0 is the new
+          mode and byte 6 is 01, the gesture marker.
+        - A bud leaving the ear or entering the case sends the same frame with
+          byte 6 = 02 (or 13/0e around the case) and the placement nibbles in
+          byte 1. Byte 0 is then the buds' temporary auto-off while nothing is
+          worn, not the mode the user chose; it once read 00 with both buds in
+          while ambient sound was audibly on. The chosen mode returns in the
+          extended status when the buds restore it.
+
+        So: a gesture frame sets the mode; a placement frame sets placement
+        only; a one-byte frame, which older models send on a pinch, is the mode.
         """
         if not p:
             return
-        if len(p) < 2 or (p[1] >> 4) not in PLACEMENTS or (p[1] & 0x0F) not in PLACEMENTS:
+        carries_placement = len(p) >= 2 and (p[1] >> 4) in PLACEMENTS and (p[1] & 0x0F) in PLACEMENTS
+        gesture = len(p) >= 7 and p[6] == 1
+        if not carries_placement or gesture:
             self.noise_mode = NOISE_MODES.get(p[0], self.noise_mode)
+        if not carries_placement:
             return
         self._apply_placement(p[1])
         for bud in (self.left, self.right):
@@ -1056,11 +1064,10 @@ class Daemon:
         elif msg_id in (Msg.FIND_MY_EARBUDS_STOP,):
             s.finding = False
         elif msg_id == Msg.TOUCH_ON_BUDS:
-            # A gesture happened on a bud. Some models push a NOISE_CONTROLS_UPDATE
-            # (id 119) of their own after one; those are handled above. The Buds4
-            # Pro send neither that nor this on a pinch, so re-sending the
-            # handshake here is a harmless best effort for the models that do
-            # answer it with a fresh status. See "Known limitations" in README.
+            # A gesture happened on a bud. The Buds3 family follows a pinch-and-hold
+            # with a NOISE_CONTROLS_UPDATE carrying the new mode (handled above);
+            # re-sending the handshake is a harmless best effort for models that
+            # answer it with a fresh status instead.
             self.request_status()
             return False
         else:
