@@ -284,14 +284,22 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(s.noise_mode, "anc")
         self.assertEqual((s.left["placement"], s.right["placement"]), ("idle", "idle"))
         self.assertIsNone(s.case["level"])
+        # Leaving the case via this frame clears the charging flag it cannot carry.
+        s.apply_extended_status(buds3_extended_payload(**{"6": 0x13, "7": 80, "42": 0x05}))
+        self.assertTrue(s.right["charging"] and s.case["charging"])
+        self.assertEqual((s.right["placement"], s.case["level"]), ("case", 80))
+        s.apply_noise_update(bytes.fromhex("02 11 01 00 09 09 02 02 02 02 02"))
+        self.assertEqual(s.right["placement"], "wearing")
+        self.assertFalse(s.right["charging"])
+        self.assertIsNone(s.case["level"])
         # A one-byte update (older models, on a pinch) is the mode.
         s.apply_noise_update(bytes([2]))
         self.assertEqual(s.noise_mode, "ambient")
-        self.assertEqual(s.left["placement"], "idle")
+        self.assertEqual(s.left["placement"], "wearing")
         # Garbage in the placement byte: treated as a mode-only frame, placement untouched.
         s.apply_noise_update(bytes([1, 0xF9]))
         self.assertEqual(s.noise_mode, "anc")
-        self.assertEqual(s.left["placement"], "idle")
+        self.assertEqual(s.left["placement"], "wearing")
 
     def test_disconnected_bud_has_no_level(self):
         s = self.state_for("Buds4 Pro")

@@ -387,8 +387,11 @@ class BudsState:
         for bud in (self.left, self.right):
             if bud["placement"] == "disconnected":
                 bud["level"] = None
-            elif bud["charging"] and bud["placement"] in ("idle", "disconnected"):
-                bud["placement"] = "case"
+            if bud["placement"] not in ("case", "case_closed"):
+                # This frame has no charging bits. A bud that just left the case
+                # is no longer charging, whatever the last status frame said;
+                # otherwise the stale flag would keep it "docked" forever.
+                bud["charging"] = False
         self._case_candidate = None  # this frame has no case byte
         self._finish_case()
 
