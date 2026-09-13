@@ -317,7 +317,8 @@ class DecoderTests(unittest.TestCase):
         s = self.state_for("Buds4 Pro")
         s.apply_status(bytes([1, 50, 60, 1, 0, 0x12, 70, 0x04]))
         self.assertEqual((s.left["level"], s.right["level"], s.case["level"]), (50, 60, 70))
-        self.assertEqual((s.left["placement"], s.right["placement"]), ("wearing", "idle"))
+        # Right reports idle with its charging bit set: it is in the case.
+        self.assertEqual((s.left["placement"], s.right["placement"]), ("wearing", "case"))
         self.assertTrue(s.right["charging"])
 
     def test_ack_updates_eq_but_is_only_a_receipt_for_noise(self):

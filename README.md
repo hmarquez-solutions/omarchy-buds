@@ -291,10 +291,30 @@ outside the shell. The daemon's framing, CRC and payload decoders have their own
 suite with synthetic frames, including the one documented sample from
 GalaxyBudsClient.
 
+`tests/test_replay.py` replays real frame captures from a Buds4 Pro
+(`tests/fixtures/*.log`) through the decoder exactly as the daemon would, checks
+a set of invariants after every frame (a bud out of the case is never charging,
+the case has a level only while a bud is docked, every status frame publishes),
+and pins the behaviour that was fixed from those captures. To add a capture,
+run `omarchy-buds daemon --debug` in the foreground, move the buds around, and
+keep the `<<`, `>>` and link lines; the fixture headers show the format.
+
 ```bash
 node tests/model.test.js
 python3 -m unittest discover -s tests
 ```
+
+In normal operation the daemon logs every non-stream frame it receives by id
+and length (a few lines a minute), so when the panel and the buds disagree,
+`journalctl --user -u omarchy-buds` shows whether the buds said anything.
+
+### Releasing
+
+Bump `version` in `manifest.json` and `VERSION` in the daemon together. Whenever
+`daemon/omarchy-buds`, `daemon/omarchy-buds-osd` or a `.service` file changes,
+append its new `sha256sum` to `daemon/shipped.sha256`; `setup` replaces an
+installed file only when its hash is on that list, in the install manifest, or
+equal to the current source.
 
 ## Credits
 

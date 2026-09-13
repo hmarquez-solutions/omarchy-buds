@@ -80,6 +80,12 @@ class Msg:
 
 
 NOISE_MODES = {0: "off", 1: "anc", 2: "ambient", 3: "adaptive"}
+
+# Unsolicited streams the daemon ignores and does not trace: the head-tracking
+# sensor data and spatial-audio control chatter (seen every few seconds on the
+# Buds3 family). Everything else is logged by id so a stale panel can be
+# diagnosed from the journal alone.
+STREAM_IDS = {194, 242, 244, 245}
 NOISE_MODE_IDS = {v: k for k, v in NOISE_MODES.items()}
 
 EQ_PRESETS = ["bass", "soft", "dynamic", "clear", "treble"]
@@ -126,15 +132,23 @@ class FrameParser:
 
     def __init__(self) -> None:
         self.buf = bytearray()
+        self.skipped = 0
+
+    def take_skipped(self) -> int:
+        """Bytes discarded while resyncing since the last call."""
+        n, self.skipped = self.skipped, 0
+        return n
 
     def feed(self, data: bytes):
         self.buf.extend(data)
         while self.buf:
             start = self.buf.find(SOM)
             if start < 0:
+                self.skipped += len(self.buf)
                 self.buf.clear()
                 return
             if start:
+                self.skipped += start
                 del self.buf[:start]
             if len(self.buf) < 4:
                 return
@@ -144,6 +158,7 @@ class FrameParser:
             # Only bits 12 (response) and 13 (fragment) sit above the 10-bit size;
             # anything else set means this SOM byte was payload, not a frame start.
             if size < 3 or header & 0xCC00:
+                self.skipped += 1
                 del self.buf[:1]
                 continue
             if len(self.buf) < total:
@@ -152,6 +167,7 @@ class FrameParser:
             # The CRC travels little-endian right after the payload.
             if frame[-1] != EOM or crc16(frame[3:-3]) != int.from_bytes(frame[-3:-1], "little"):
                 # Not a frame after all; skip this SOM and resync on the next.
+                self.skipped += 1
                 del self.buf[:1]
                 continue
             del self.buf[:total]
@@ -282,6 +298,13 @@ class BudsState:
         self._case_candidate = case_raw
         self._finish_case()
 
+    def _reconcile_charging(self) -> None:
+        """Charging wins over "idle": the charging bit flips before the placement
+        nibble when a bud drops into the case, on both status frame kinds."""
+        for bud in (self.left, self.right):
+            if bud["charging"] and bud["placement"] in ("idle", "disconnected"):
+                bud["placement"] = "case"
+
     def _docked(self) -> bool:
         """A charging bud is docked whatever its placement byte says."""
         return any(b["placement"] in ("case", "case_closed") or b["charging"] for b in (self.left, self.right))
@@ -303,6 +326,7 @@ class BudsState:
         self._apply_placement(p[5])
         if self.supports("charging_state") and len(p) > 7:
             self._apply_charging(p[7])
+        self._reconcile_charging()
         self._finish_levels(p[1], p[2], p[6])
 
     def apply_extended_status(self, p: bytes) -> None:
@@ -358,11 +382,8 @@ class BudsState:
             if extra_high_at is not None and len(p) > extra_high_at:
                 self.extra_high_ambient = p[extra_high_at] == 1
 
-        # Charging always wins over "idle" for the placement label.
-        for bud in (self.left, self.right):
-            if bud["charging"] and bud["placement"] in ("idle", "disconnected"):
-                bud["placement"] = "case"
         # Charging bits arrive after the levels, and they decide whether a bud is docked.
+        self._reconcile_charging()
         self._finish_case()
 
     def apply_noise_update(self, p: bytes) -> None:
@@ -971,8 +992,16 @@ class Daemon:
             return False
         changed = False
         for msg_id, payload, is_response in self.parser.feed(data):
-            self.dbg(f"<< id={msg_id} resp={int(is_response)} payload={payload.hex(' ')}")
+            if self.debug:
+                self.log(f"<< id={msg_id} resp={int(is_response)} payload={payload.hex(' ')}")
+            elif msg_id not in STREAM_IDS:
+                # Always on, ids and lengths only: a few lines a minute, and the
+                # evidence needed when the panel and the buds disagree.
+                self.log(f"omarchy-buds: << id={msg_id} resp={int(is_response)} len={len(payload)}")
             changed |= self.handle(msg_id, payload)
+        skipped = self.parser.take_skipped()
+        if skipped:
+            self.log(f"omarchy-buds: resynced control stream, skipped {skipped} bytes")
         if changed:
             self.publish()
         return True
