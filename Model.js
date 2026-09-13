@@ -215,10 +215,9 @@ function budMeta(bud) {
   return PLACEMENT_LABELS[bud.placement] || ""
 }
 
-// The buds only read the case while one of them is docked in it.
+// The level reads "—" while no bud is docked; no hint text, the meta column is narrow.
 function caseMeta(c) {
-  if (!c || c.level === LEVEL_UNKNOWN) return "Dock a bud to read"
-  return c.charging ? "Charging" : ""
+  return c && c.level !== LEVEL_UNKNOWN && c.charging ? "Charging" : ""
 }
 
 function noiseModeName(mode) {

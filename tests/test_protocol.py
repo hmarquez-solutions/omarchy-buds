@@ -253,10 +253,13 @@ class DecoderTests(unittest.TestCase):
         # Left bud in the case: the reading is live.
         s.apply_extended_status(buds3_extended_payload(**{"6": 0x31, "7": 64}))
         self.assertEqual(s.case["level"], 64)
-        # Closed case counts as docked; out-of-range stays unknown.
+        # Closed case counts as docked; an out-of-range byte keeps the last live reading.
         s.apply_extended_status(buds3_extended_payload(**{"6": 0x14, "7": 100}))
         self.assertEqual(s.case["level"], 100)
         s.apply_extended_status(buds3_extended_payload(**{"6": 0x31, "7": 255}))
+        self.assertEqual(s.case["level"], 100)
+        # Undocked again: unknown, whatever the byte says.
+        s.apply_extended_status(buds3_extended_payload(**{"6": 0x11, "7": 0}))
         self.assertIsNone(s.case["level"])
 
     def test_noise_update_carries_placement_on_buds3(self):
@@ -264,9 +267,18 @@ class DecoderTests(unittest.TestCase):
         s = self.state_for("Buds4 Pro")
         s.apply_extended_status(buds3_extended_payload())
         self.assertEqual(s.noise_mode, "anc")
+        # Docking announced by this frame: no case byte, and none read yet -> unknown,
+        # not the meaningless 0/64 seen while both buds were out.
         s.apply_noise_update(bytes.fromhex("02 31 01 00 09 09 02 02 02 02 02"))
         self.assertEqual((s.left["placement"], s.right["placement"]), ("case", "wearing"))
-        self.assertEqual(s.case["level"], 64)
+        self.assertIsNone(s.case["level"])
+        # A status frame while docked is a live reading; a later 119 docking reuses it.
+        s.apply_status(bytes([1, 100, 99, 1, 0, 0x31, 77, 0x00]))
+        self.assertEqual(s.case["level"], 77)
+        s.apply_noise_update(bytes.fromhex("02 11 01 00 09 09 02 02 02 02 02"))
+        self.assertIsNone(s.case["level"])
+        s.apply_noise_update(bytes.fromhex("02 13 01 00 09 09 02 02 02 02 02"))
+        self.assertEqual(s.case["level"], 77)
         # Byte 0 is the buds' auto-off while nothing is worn, not the chosen mode.
         s.apply_noise_update(bytes.fromhex("00 22 01 00 09 09 02 02 02 02 02"))
         self.assertEqual(s.noise_mode, "anc")

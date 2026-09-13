@@ -227,7 +227,10 @@ class BudsState:
         self.left = _bud()
         self.right = _bud()
         self.case = {"level": None, "charging": False}
-        self._case_raw = 255
+        # Last live case reading (taken only while a bud was docked), and the case
+        # byte of the frame being decoded, if it carried one.
+        self._case_raw = None
+        self._case_candidate = None
         self.noise_mode = None
         self.ambient_volume = None
         self.extra_high_ambient = False
@@ -276,17 +279,22 @@ class BudsState:
     def _finish_levels(self, left_raw, right_raw, case_raw) -> None:
         self.left["level"] = self._level(left_raw, self.left["placement"])
         self.right["level"] = self._level(right_raw, self.right["placement"])
-        self._case_raw = case_raw
+        self._case_candidate = case_raw
         self._finish_case()
 
+    def _docked(self) -> bool:
+        """A charging bud is docked whatever its placement byte says."""
+        return any(b["placement"] in ("case", "case_closed") or b["charging"] for b in (self.left, self.right))
+
     def _finish_case(self) -> None:
-        """The buds read the case over the charging contacts, so with both buds
-        out the case byte is 0 (or a stale value), not a measurement. A charging
-        bud is docked whatever its placement byte says."""
-        docked = any(
-            b["placement"] in ("case", "case_closed") or b["charging"] for b in (self.left, self.right)
-        )
-        self.case["level"] = self._case_raw if docked and 0 <= self._case_raw <= 100 else None
+        """The buds read the case over the charging contacts, so a case byte is a
+        measurement only while a bud is docked; with both buds out it is 0 or
+        stale. A docking announced by a frame without a case byte shows the last
+        live reading until a status frame brings a fresh one."""
+        docked = self._docked()
+        if docked and self._case_candidate is not None and 0 <= self._case_candidate <= 100:
+            self._case_raw = self._case_candidate
+        self.case["level"] = self._case_raw if docked else None
 
     def apply_status(self, p: bytes) -> None:
         """STATUS_UPDATED: the short battery/placement heartbeat."""
@@ -381,6 +389,7 @@ class BudsState:
                 bud["level"] = None
             elif bud["charging"] and bud["placement"] in ("idle", "disconnected"):
                 bud["placement"] = "case"
+        self._case_candidate = None  # this frame has no case byte
         self._finish_case()
 
     def apply_ack(self, p: bytes) -> None:

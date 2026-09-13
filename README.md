@@ -43,11 +43,11 @@ request.
 
 ## Known limitations
 
-- **The case level shows as `—` with "Dock a bud to read" while both buds are
-  out of the case.** The buds read the case battery over the charging contacts,
-  so with nothing docked the firmware sends 0 rather than a measurement. The
-  Wearable app hides the case in the same situation. Drop one bud in and the
-  reading appears within a second.
+- **The case level shows as `—` while both buds are out of the case.** The
+  buds read the case battery over the charging contacts, so with nothing docked
+  the firmware sends 0 rather than a measurement, and the Wearable app hides the
+  case in the same situation. Drop a bud in and the last live reading appears,
+  refreshed as soon as the buds send a status frame with a new one.
 - **Changing the noise mode on the buds does not update the panel live, on the
   Buds4 Pro.** Panel → buds works and is acknowledged; buds → panel does not.
   When you pinch-and-hold to cycle the mode, this firmware sends no
