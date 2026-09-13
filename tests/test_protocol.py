@@ -263,20 +263,22 @@ class DecoderTests(unittest.TestCase):
         # Payloads captured live from a Buds4 Pro while moving the left bud.
         s = self.state_for("Buds4 Pro")
         s.apply_extended_status(buds3_extended_payload())
+        self.assertEqual(s.noise_mode, "anc")
         s.apply_noise_update(bytes.fromhex("02 31 01 00 09 09 02 02 02 02 02"))
-        self.assertEqual(s.noise_mode, "ambient")
         self.assertEqual((s.left["placement"], s.right["placement"]), ("case", "wearing"))
         self.assertEqual(s.case["level"], 64)
+        # Byte 0 is the buds' auto-off while nothing is worn, not the chosen mode.
         s.apply_noise_update(bytes.fromhex("00 22 01 00 09 09 02 02 02 02 02"))
-        self.assertEqual(s.noise_mode, "off")
+        self.assertEqual(s.noise_mode, "anc")
         self.assertEqual((s.left["placement"], s.right["placement"]), ("idle", "idle"))
         self.assertIsNone(s.case["level"])
-        # A one-byte update (older models) still only sets the mode.
-        s.apply_noise_update(bytes([1]))
-        self.assertEqual(s.noise_mode, "anc")
+        # A one-byte update (older models, on a pinch) is the mode.
+        s.apply_noise_update(bytes([2]))
+        self.assertEqual(s.noise_mode, "ambient")
         self.assertEqual(s.left["placement"], "idle")
-        # Garbage in the placement byte is ignored.
-        s.apply_noise_update(bytes([2, 0xF9]))
+        # Garbage in the placement byte: treated as a mode-only frame, placement untouched.
+        s.apply_noise_update(bytes([1, 0xF9]))
+        self.assertEqual(s.noise_mode, "anc")
         self.assertEqual(s.left["placement"], "idle")
 
     def test_disconnected_bud_has_no_level(self):

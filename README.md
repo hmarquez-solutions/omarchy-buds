@@ -54,9 +54,11 @@ request.
   notification over the control link — no `NOISE_CONTROLS_UPDATE`, no fresh
   extended status, and no gesture frame either; the only unsolicited traffic is
   the head-tracking sensor stream. (It does send `NOISE_CONTROLS_UPDATE` when a
-  bud leaves the ear or enters the case, carrying the new placement, and the
-  panel uses that for live bud placement.) There is also no request that reads the
-  current mode back, so the panel cannot poll for it, and the one thing that
+  bud leaves the ear or enters the case. The panel uses its placement byte for
+  live bud placement, but not its mode byte, which reports the buds' temporary
+  auto-off while nothing is worn rather than the mode you chose.) There is also
+  no request that reads the current mode back, so the panel cannot poll for it,
+  and the one thing that
   would force a fresh status — dropping and reopening the link — takes the audio
   profile down with it, which is not a trade worth making for a status refresh.
   The panel corrects itself on the next reconnect. GalaxyBudsClient marks the
