@@ -10,14 +10,15 @@ width of 1.0, top-left at the origin. BudsIcon.qml scales them to size at
 run time, so the stroke stays one crisp hairline at every icon size and
 follows the shell foreground like any glyph.
 """
+
 import json
 import math
 import sys
 
-THRESHOLD = 128        # alpha at or above this is "bud"
-MIN_COMPONENT = 2000   # pixels; drops stray specks in the cut-out
-SMOOTH_PASSES = 5      # 1-2-1 passes that take the pixel staircase out
-SIMPLIFY_EPS = 2.0     # Douglas-Peucker tolerance, in source pixels
+THRESHOLD = 128  # alpha at or above this is "bud"
+MIN_COMPONENT = 2000  # pixels; drops stray specks in the cut-out
+SMOOTH_PASSES = 5  # 1-2-1 passes that take the pixel staircase out
+SIMPLIFY_EPS = 2.0  # Douglas-Peucker tolerance, in source pixels
 
 
 def read_pgm(stream):
@@ -25,8 +26,8 @@ def read_pgm(stream):
     if tokens[0] != "P2":
         sys.exit("expected a plain P2 PGM (use -compress none)")
     w, h = int(tokens[1]), int(tokens[2])
-    vals = list(map(int, tokens[4:4 + w * h]))
-    return w, h, [vals[y * w:(y + 1) * w] for y in range(h)]
+    vals = list(map(int, tokens[4 : 4 + w * h]))
+    return w, h, [vals[y * w : (y + 1) * w] for y in range(h)]
 
 
 def components(mask, w, h):
@@ -42,7 +43,12 @@ def components(mask, w, h):
                 cx, cy = stack.pop()
                 pts.append((cx, cy))
                 for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
-                    if 0 <= nx < w and 0 <= ny < h and mask[ny][nx] and not seen[ny][nx]:
+                    if (
+                        0 <= nx < w
+                        and 0 <= ny < h
+                        and mask[ny][nx]
+                        and not seen[ny][nx]
+                    ):
                         seen[ny][nx] = 1
                         stack.append((nx, ny))
             if len(pts) >= MIN_COMPONENT:
@@ -59,14 +65,22 @@ def boundary(pixels):
     poly = []
     while True:
         poly.append((x, y))
-        if d == 0: x += 1
-        elif d == 1: y += 1
-        elif d == 2: x -= 1
-        else: y -= 1
-        if d == 0: right, left = (x, y), (x, y - 1)
-        elif d == 1: right, left = (x - 1, y), (x, y)
-        elif d == 2: right, left = (x - 1, y - 1), (x - 1, y)
-        else: right, left = (x, y - 1), (x - 1, y - 1)
+        if d == 0:
+            x += 1
+        elif d == 1:
+            y += 1
+        elif d == 2:
+            x -= 1
+        else:
+            y -= 1
+        if d == 0:
+            right, left = (x, y), (x, y - 1)
+        elif d == 1:
+            right, left = (x - 1, y), (x, y)
+        elif d == 2:
+            right, left = (x - 1, y - 1), (x - 1, y)
+        else:
+            right, left = (x, y - 1), (x - 1, y - 1)
         if left in filled:
             d = (d - 1) % 4
         elif right not in filled:
@@ -78,9 +92,13 @@ def boundary(pixels):
 def smooth(points, passes):
     for _ in range(passes):
         n = len(points)
-        points = [((points[i - 1][0] + 2 * points[i][0] + points[(i + 1) % n][0]) / 4,
-                   (points[i - 1][1] + 2 * points[i][1] + points[(i + 1) % n][1]) / 4)
-                  for i in range(n)]
+        points = [
+            (
+                (points[i - 1][0] + 2 * points[i][0] + points[(i + 1) % n][0]) / 4,
+                (points[i - 1][1] + 2 * points[i][1] + points[(i + 1) % n][1]) / 4,
+            )
+            for i in range(n)
+        ]
     return points
 
 
@@ -89,7 +107,10 @@ def simplify(points, eps):
         dx, dy = b[0] - a[0], b[1] - a[1]
         if dx == dy == 0:
             return math.hypot(p[0] - a[0], p[1] - a[1])
-        t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)))
+        t = max(
+            0.0,
+            min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)),
+        )
         return math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy))
 
     def rec(pts):
@@ -99,12 +120,16 @@ def simplify(points, eps):
             if dd > dmax:
                 idx, dmax = i, dd
         if dmax > eps:
-            return rec(pts[:idx + 1])[:-1] + rec(pts[idx:])
+            return rec(pts[: idx + 1])[:-1] + rec(pts[idx:])
         return [pts[0], pts[-1]]
 
-    far = max(range(len(points)),
-              key=lambda i: math.hypot(points[i][0] - points[0][0], points[i][1] - points[0][1]))
-    first = rec(points[:far + 1])
+    far = max(
+        range(len(points)),
+        key=lambda i: math.hypot(
+            points[i][0] - points[0][0], points[i][1] - points[0][1]
+        ),
+    )
+    first = rec(points[: far + 1])
     second = rec(points[far:] + [points[0]])
     return first[:-1] + second[:-1]
 
@@ -122,10 +147,12 @@ def beziers(pts):
 def main():
     w, h, img = read_pgm(sys.stdin)
     mask = [[1 if v >= THRESHOLD else 0 for v in row] for row in img]
-    outlines = [simplify(smooth(boundary(c), SMOOTH_PASSES), SIMPLIFY_EPS)
-                for c in components(mask, w, h)]
+    outlines = [
+        simplify(smooth(boundary(c), SMOOTH_PASSES), SIMPLIFY_EPS)
+        for c in components(mask, w, h)
+    ]
     if len(outlines) != 2:
-        sys.exit("expected two buds, traced %d shapes" % len(outlines))
+        sys.exit(f"expected two buds, traced {len(outlines)} shapes")
     every = [p for o in outlines for p in o]
     minx, maxx = min(p[0] for p in every), max(p[0] for p in every)
     miny, maxy = min(p[1] for p in every), max(p[1] for p in every)
@@ -142,18 +169,33 @@ def main():
         pts = [norm(p) for p in o]
         segs = [pts[0]]
         for c1, c2, p in beziers(pts):
-            segs.append([round(c1[0], 4), round(c1[1], 4), round(c2[0], 4), round(c2[1], 4), p[0], p[1]])
+            segs.append(
+                [
+                    round(c1[0], 4),
+                    round(c1[1], 4),
+                    round(c2[0], 4),
+                    round(c2[1], 4),
+                    p[0],
+                    p[1],
+                ]
+            )
         shapes.append(segs)
 
     out = sys.stdout
-    out.write("// Generated by tools/trace-icon.py from assets/buds4-pro-black-cutout.png. Do not edit.\n")
-    out.write("// Outline of the Galaxy Buds4 Pro pair, normalised to width 1.0 with the top-left at 0,0.\n")
-    out.write("// Each shape is a start point followed by cubic segments [c1x, c1y, c2x, c2y, x, y].\n\n")
+    out.write(
+        "// Generated by tools/trace-icon.py from assets/buds4-pro-black-cutout.png. Do not edit.\n"
+    )
+    out.write(
+        "// Outline of the Galaxy Buds4 Pro pair, normalised to width 1.0 with the top-left at 0,0.\n"
+    )
+    out.write(
+        "// Each shape is a start point followed by cubic segments [c1x, c1y, c2x, c2y, x, y].\n\n"
+    )
     out.write(".pragma library\n\n")
-    out.write("var ASPECT = %.4f\n\n" % aspect)
+    out.write(f"var ASPECT = {aspect:.4f}\n\n")
     out.write("var SHAPES = [\n")
     for i, s in enumerate(shapes):
-        out.write("  [\n    %s,\n" % json.dumps(list(s[0])))
+        out.write(f"  [\n    {json.dumps(list(s[0]))},\n")
         out.write(",\n".join("    " + json.dumps(seg) for seg in s[1:]))
         out.write("\n  ]%s\n" % ("," if i == 0 else ""))
     out.write("]\n\n")

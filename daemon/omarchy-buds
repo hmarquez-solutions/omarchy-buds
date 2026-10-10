@@ -21,12 +21,12 @@ import argparse
 import errno
 import json
 import os
+import secrets
 import signal
 import socket
 import stat
 import sys
 import time
-import secrets
 import warnings
 
 # PyGObject renames these helpers every few releases; the old names still work.
@@ -124,7 +124,14 @@ def encode(msg_id: int, payload: bytes = b"", flags: int = 0) -> bytes:
     size = 1 + len(payload) + 2
     crc = crc16(bytes([msg_id]) + payload)
     header = (size & 0x3FF) | (flags & 0x3000)
-    return bytes([SOM]) + header.to_bytes(2, "little") + bytes([msg_id]) + payload + crc.to_bytes(2, "little") + bytes([EOM])
+    return (
+        bytes([SOM])
+        + header.to_bytes(2, "little")
+        + bytes([msg_id])
+        + payload
+        + crc.to_bytes(2, "little")
+        + bytes([EOM])
+    )
 
 
 class FrameParser:
@@ -144,12 +151,14 @@ class FrameParser:
         """Length of the complete, valid frame starting at buf[pos], else None."""
         if pos + 4 > len(buf) or buf[pos] != SOM:
             return None
-        size = int.from_bytes(buf[pos + 1:pos + 3], "little") & 0x3FF
+        size = int.from_bytes(buf[pos + 1 : pos + 3], "little") & 0x3FF
         total = 3 + size + 1
         if size < 3 or pos + total > len(buf) or buf[pos + total - 1] != EOM:
             return None
-        body = bytes(buf[pos + 3:pos + total - 3])
-        if crc16(body) != int.from_bytes(buf[pos + total - 3:pos + total - 1], "little"):
+        body = bytes(buf[pos + 3 : pos + total - 3])
+        if crc16(body) != int.from_bytes(
+            buf[pos + total - 3 : pos + total - 1], "little"
+        ):
             return None
         return total
 
@@ -199,7 +208,9 @@ class FrameParser:
                 continue
             frame = bytes(self.buf[:total])
             # The CRC travels little-endian right after the payload.
-            if frame[-1] != EOM or crc16(frame[3:-3]) != int.from_bytes(frame[-3:-1], "little"):
+            if frame[-1] != EOM or crc16(frame[3:-3]) != int.from_bytes(
+                frame[-3:-1], "little"
+            ):
                 # Not a frame after all; skip this SOM and resync on the next.
                 self.skipped += 1
                 del self.buf[:1]
@@ -232,11 +243,61 @@ MODELS = [
 # What each payload family can be asked to do. The 2019 Galaxy Buds use a
 # different frame header entirely and are not supported.
 FAMILY_FEATURES = {
-    "buds3": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock", "call_touch_lock"},
-    "budsfe": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock", "call_touch_lock"},
-    "buds2pro": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock", "call_touch_lock"},
-    "buds2": {"noise_control", "ambient_volume", "one_bud_anc", "touch_lock", "equalizer", "find", "charging_state", "advanced_touch_lock"},
-    "budspro": {"noise_control", "ambient_volume", "one_bud_anc", "conversation_detect", "touch_lock", "equalizer", "find"},
+    "buds3": {
+        "noise_control",
+        "ambient_volume",
+        "one_bud_anc",
+        "conversation_detect",
+        "touch_lock",
+        "equalizer",
+        "find",
+        "charging_state",
+        "advanced_touch_lock",
+        "call_touch_lock",
+    },
+    "budsfe": {
+        "noise_control",
+        "ambient_volume",
+        "one_bud_anc",
+        "conversation_detect",
+        "touch_lock",
+        "equalizer",
+        "find",
+        "charging_state",
+        "advanced_touch_lock",
+        "call_touch_lock",
+    },
+    "buds2pro": {
+        "noise_control",
+        "ambient_volume",
+        "one_bud_anc",
+        "conversation_detect",
+        "touch_lock",
+        "equalizer",
+        "find",
+        "charging_state",
+        "advanced_touch_lock",
+        "call_touch_lock",
+    },
+    "buds2": {
+        "noise_control",
+        "ambient_volume",
+        "one_bud_anc",
+        "touch_lock",
+        "equalizer",
+        "find",
+        "charging_state",
+        "advanced_touch_lock",
+    },
+    "budspro": {
+        "noise_control",
+        "ambient_volume",
+        "one_bud_anc",
+        "conversation_detect",
+        "touch_lock",
+        "equalizer",
+        "find",
+    },
     "legacy": {"touch_lock", "equalizer", "find"},
     "generic": {"noise_control", "ambient_volume", "equalizer", "find"},
 }
@@ -249,9 +310,19 @@ AMBIENT_VOLUME_MAX = {"budspro": 3, "buds3": 4}
 def identify(name: str):
     for fragment, label, family, uuid, extra in MODELS:
         if fragment in name:
-            return {"label": label, "family": family, "uuid": uuid, "features": FAMILY_FEATURES[family] | extra}
+            return {
+                "label": label,
+                "family": family,
+                "uuid": uuid,
+                "features": FAMILY_FEATURES[family] | extra,
+            }
     if "Buds" in name:
-        return {"label": "Galaxy Buds", "family": "generic", "uuid": UUID_SPP_NEW, "features": FAMILY_FEATURES["generic"]}
+        return {
+            "label": "Galaxy Buds",
+            "family": "generic",
+            "uuid": UUID_SPP_NEW,
+            "features": FAMILY_FEATURES["generic"],
+        }
     return None
 
 
@@ -299,7 +370,9 @@ class BudsState:
         return feature in self.features
 
     def wearing(self) -> bool:
-        return self.left["placement"] == "wearing" or self.right["placement"] == "wearing"
+        return (
+            self.left["placement"] == "wearing" or self.right["placement"] == "wearing"
+        )
 
     def available_noise_modes(self) -> list[str]:
         if not self.supports("noise_control"):
@@ -341,7 +414,10 @@ class BudsState:
 
     def _docked(self) -> bool:
         """A charging bud is docked whatever its placement byte says."""
-        return any(b["placement"] in ("case", "case_closed") or b["charging"] for b in (self.left, self.right))
+        return any(
+            b["placement"] in ("case", "case_closed") or b["charging"]
+            for b in (self.left, self.right)
+        )
 
     def _finish_case(self) -> None:
         """The buds read the case over the charging contacts, so a case byte is a
@@ -349,7 +425,11 @@ class BudsState:
         stale. A docking announced by a frame without a case byte shows the last
         live reading until a status frame brings a fresh one."""
         docked = self._docked()
-        if docked and self._case_candidate is not None and 0 <= self._case_candidate <= 100:
+        if (
+            docked
+            and self._case_candidate is not None
+            and 0 <= self._case_candidate <= 100
+        ):
             self._case_raw = self._case_candidate
         self.case["level"] = self._case_raw if docked else None
 
@@ -370,7 +450,9 @@ class BudsState:
         self.revision = p[0]
         self._apply_placement(p[6])
         self._finish_levels(p[2], p[3], p[7])
-        self.eq_preset = "off" if p[9] == 0 else EQ_PRESETS[min(p[9] - 1, len(EQ_PRESETS) - 1)]
+        self.eq_preset = (
+            "off" if p[9] == 0 else EQ_PRESETS[min(p[9] - 1, len(EQ_PRESETS) - 1)]
+        )
 
         if self.supports("advanced_touch_lock"):
             self.touch_flags = p[10] & 0x7F
@@ -440,7 +522,9 @@ class BudsState:
         """
         if not p:
             return
-        carries_placement = len(p) >= 2 and (p[1] >> 4) in PLACEMENTS and (p[1] & 0x0F) in PLACEMENTS
+        carries_placement = (
+            len(p) >= 2 and (p[1] >> 4) in PLACEMENTS and (p[1] & 0x0F) in PLACEMENTS
+        )
         gesture = len(p) >= 7 and p[6] == 1
         if not carries_placement or gesture:
             self.noise_mode = NOISE_MODES.get(p[0], self.noise_mode)
@@ -474,7 +558,9 @@ class BudsState:
         elif msg_id == Msg.SET_ANC_WITH_ONE_EARBUD:
             self.one_bud_anc = value == 1
         elif msg_id == Msg.EQUALIZER:
-            self.eq_preset = "off" if value == 0 else EQ_PRESETS[min(value - 1, len(EQ_PRESETS) - 1)]
+            self.eq_preset = (
+                "off" if value == 0 else EQ_PRESETS[min(value - 1, len(EQ_PRESETS) - 1)]
+            )
         elif msg_id == Msg.EXTRA_HIGH_AMBIENT:
             self.extra_high_ambient = value == 1
 
@@ -483,7 +569,9 @@ class BudsState:
     def to_json(self) -> dict:
         model = self.model or {}
         family = model.get("family", "")
-        ambient_max = AMBIENT_VOLUME_MAX.get(family, 2) + (1 if self.extra_high_ambient else 0)
+        ambient_max = AMBIENT_VOLUME_MAX.get(family, 2) + (
+            1 if self.extra_high_ambient else 0
+        )
         return {
             "schema_version": SCHEMA_VERSION,
             "daemon_version": VERSION,
@@ -495,7 +583,11 @@ class BudsState:
                 "family": family,
                 "revision": self.revision,
             },
-            "battery": {"left": dict(self.left), "right": dict(self.right), "case": dict(self.case)},
+            "battery": {
+                "left": dict(self.left),
+                "right": dict(self.right),
+                "case": dict(self.case),
+            },
             "noise": {
                 "mode": self.noise_mode,
                 "available": self.available_noise_modes(),
@@ -520,7 +612,9 @@ class BudsState:
 
 def state_dir() -> str:
     return os.environ.get("STATE_DIRECTORY") or os.path.join(
-        os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state"), "omarchy-buds"
+        os.environ.get("XDG_STATE_HOME")
+        or os.path.join(os.path.expanduser("~"), ".local", "state"),
+        "omarchy-buds",
     )
 
 
@@ -553,7 +647,11 @@ def check_private_dir(path: str) -> bool:
         st = os.lstat(path)
     except FileNotFoundError:
         return False
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+    if (
+        not stat.S_ISDIR(st.st_mode)
+        or st.st_uid != os.getuid()
+        or stat.S_IMODE(st.st_mode) & 0o077
+    ):
         raise PermissionError(f"private directory check failed for {path}")
     return True
 
@@ -565,11 +663,22 @@ def read_status_file() -> bytes:
     try:
         directory_fd = os.open(
             state_dir(),
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
         )
-        file_fd = os.open("status.json", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), dir_fd=directory_fd)
+        file_fd = os.open(
+            "status.json",
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory_fd,
+        )
         st = os.fstat(file_fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+        if (
+            not stat.S_ISREG(st.st_mode)
+            or st.st_uid != os.getuid()
+            or stat.S_IMODE(st.st_mode) & 0o077
+        ):
             raise PermissionError("status file ownership or mode check failed")
         data = bytearray()
         while len(data) <= MAX_STATUS_BYTES:
@@ -592,7 +701,11 @@ def control_socket_present() -> bool:
         st = os.lstat(socket_path())
     except FileNotFoundError:
         return False
-    if not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+    if (
+        not stat.S_ISSOCK(st.st_mode)
+        or st.st_uid != os.getuid()
+        or stat.S_IMODE(st.st_mode) & 0o077
+    ):
         raise PermissionError("control socket ownership or mode check failed")
     return True
 
@@ -661,14 +774,37 @@ class Daemon:
             GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, self.quit)
 
         node = self.Gio.DBusNodeInfo.new_for_xml(PROFILE_XML)
-        self.bus.register_object(PROFILE_PATH, node.interfaces[0], self.on_profile_call, None, None)
+        self.bus.register_object(
+            PROFILE_PATH, node.interfaces[0], self.on_profile_call, None, None
+        )
 
-        self.bus.signal_subscribe(BLUEZ, "org.freedesktop.DBus.Properties", "PropertiesChanged", None, "org.bluez.Device1",
-                                  self.Gio.DBusSignalFlags.NONE, self.on_properties_changed)
-        self.bus.signal_subscribe(BLUEZ, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded", "/", None,
-                                  self.Gio.DBusSignalFlags.NONE, self.on_interfaces_added)
-        self.bus.signal_subscribe("org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged", None, BLUEZ,
-                                  self.Gio.DBusSignalFlags.NONE, self.on_bluez_owner_changed)
+        self.bus.signal_subscribe(
+            BLUEZ,
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            None,
+            "org.bluez.Device1",
+            self.Gio.DBusSignalFlags.NONE,
+            self.on_properties_changed,
+        )
+        self.bus.signal_subscribe(
+            BLUEZ,
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesAdded",
+            "/",
+            None,
+            self.Gio.DBusSignalFlags.NONE,
+            self.on_interfaces_added,
+        )
+        self.bus.signal_subscribe(
+            "org.freedesktop.DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+            None,
+            BLUEZ,
+            self.Gio.DBusSignalFlags.NONE,
+            self.on_bluez_owner_changed,
+        )
 
         self.setup_bluez()
         self.loop.run()
@@ -697,12 +833,18 @@ class Daemon:
 
     def _open_private_dir(self, path: str) -> int:
         ensure_private_dir(path)
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = (
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        )
         flags |= getattr(os, "O_CLOEXEC", 0)
         fd = os.open(path, flags)
         try:
             st = os.fstat(fd)
-            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+            if (
+                not stat.S_ISDIR(st.st_mode)
+                or st.st_uid != os.getuid()
+                or stat.S_IMODE(st.st_mode) & 0o077
+            ):
                 raise PermissionError(f"private directory check failed for {path}")
             return fd
         except Exception:
@@ -728,11 +870,26 @@ class Daemon:
         except Exception:  # noqa: BLE001
             return None
 
-    def call(self, path: str, iface: str, method: str, params=None, reply_type: str | None = None):
+    def call(
+        self,
+        path: str,
+        iface: str,
+        method: str,
+        params=None,
+        reply_type: str | None = None,
+    ):
         GLib = self.GLib
-        return self.bus.call_sync(BLUEZ, path, iface, method, params,
-                                  GLib.VariantType(reply_type) if reply_type else None,
-                                  self.Gio.DBusCallFlags.NONE, 15000, None)
+        return self.bus.call_sync(
+            BLUEZ,
+            path,
+            iface,
+            method,
+            params,
+            GLib.VariantType(reply_type) if reply_type else None,
+            self.Gio.DBusCallFlags.NONE,
+            15000,
+            None,
+        )
 
     def setup_bluez(self) -> bool:
         """Register our profiles and attach to any buds that are already connected.
@@ -744,14 +901,21 @@ class Daemon:
             for uuid in (UUID_SPP_NEW, UUID_SPP_STANDARD):
                 if uuid in self.registered:
                     continue
-                opts = {"Role": GLib.Variant("s", "client"), "Name": GLib.Variant("s", "omarchy-buds"),
-                        # Only Samsung's private UUID is safe to auto-connect; the generic
-                        # serial UUID is shared by unrelated gadgets.
-                        "AutoConnect": GLib.Variant("b", uuid == UUID_SPP_NEW)}
+                opts = {
+                    "Role": GLib.Variant("s", "client"),
+                    "Name": GLib.Variant("s", "omarchy-buds"),
+                    # Only Samsung's private UUID is safe to auto-connect; the generic
+                    # serial UUID is shared by unrelated gadgets.
+                    "AutoConnect": GLib.Variant("b", uuid == UUID_SPP_NEW),
+                }
                 try:
-                    self.call("/org/bluez", "org.bluez.ProfileManager1", "RegisterProfile",
-                              GLib.Variant("(osa{sv})", (PROFILE_PATH, uuid, opts)))
-                except Exception as exc:  # noqa: BLE001
+                    self.call(
+                        "/org/bluez",
+                        "org.bluez.ProfileManager1",
+                        "RegisterProfile",
+                        GLib.Variant("(osa{sv})", (PROFILE_PATH, uuid, opts)),
+                    )
+                except Exception as exc:
                     if "AlreadyExists" not in str(exc):
                         raise
                 self.registered.add(uuid)
@@ -766,7 +930,13 @@ class Daemon:
 
     def scan_devices(self) -> None:
         try:
-            managed = self.call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None, "(a{oa{sa{sv}}})")[0]
+            managed = self.call(
+                "/",
+                "org.freedesktop.DBus.ObjectManager",
+                "GetManagedObjects",
+                None,
+                "(a{oa{sa{sv}}})",
+            )[0]
         except Exception as exc:  # noqa: BLE001
             self.log(f"omarchy-buds: GetManagedObjects failed: {exc}")
             return
@@ -784,14 +954,18 @@ class Daemon:
         if self.sock and self.device_path == path:
             return
         if self.sock:
-            self.dbg(f"omarchy-buds: ignoring {name}; already linked to {self.state.name}")
+            self.dbg(
+                f"omarchy-buds: ignoring {name}; already linked to {self.state.name}"
+            )
             return
         self.device_path = path
         self.state.name = name
         self.state.address = props.get("Address", "")
         self.state.model = model
         self.connect_attempts = 0
-        self.log(f"omarchy-buds: {name} ({model['label']}) is connected; opening control link")
+        self.log(
+            f"omarchy-buds: {name} ({model['label']}) is connected; opening control link"
+        )
         self.connect_profile()
 
     def validate_device(self, path: str, props: dict) -> tuple[str, dict]:
@@ -835,23 +1009,42 @@ class Daemon:
                     return
                 self.connect_attempts += 1
                 if self.connect_attempts <= 10:
-                    self.dbg(f"omarchy-buds: ConnectProfile failed ({text}); attempt {self.connect_attempts}/10")
+                    self.dbg(
+                        f"omarchy-buds: ConnectProfile failed ({text}); attempt {self.connect_attempts}/10"
+                    )
                     self.GLib.timeout_add(1500, self.connect_profile)
                 else:
                     self.log(f"omarchy-buds: giving up on the control link: {text}")
 
-        self.bus.call(BLUEZ, device_path, "org.bluez.Device1", "ConnectProfile", self.GLib.Variant("(s)", (uuid,)),
-                      None, self.Gio.DBusCallFlags.NONE, 30000, None, done)
+        self.bus.call(
+            BLUEZ,
+            device_path,
+            "org.bluez.Device1",
+            "ConnectProfile",
+            self.GLib.Variant("(s)", (uuid,)),
+            None,
+            self.Gio.DBusCallFlags.NONE,
+            30000,
+            None,
+            done,
+        )
         return False
 
-    def on_properties_changed(self, _conn, _sender, path, _iface, _signal, params) -> None:
+    def on_properties_changed(
+        self, _conn, _sender, path, _iface, _signal, params
+    ) -> None:
         _iface_name, changed, _invalidated = params.unpack()
         if "Connected" not in changed:
             return
         if changed["Connected"]:
             try:
-                props = self.call(path, "org.freedesktop.DBus.Properties", "GetAll",
-                                  self.GLib.Variant("(s)", ("org.bluez.Device1",)), "(a{sv})")[0]
+                props = self.call(
+                    path,
+                    "org.freedesktop.DBus.Properties",
+                    "GetAll",
+                    self.GLib.Variant("(s)", ("org.bluez.Device1",)),
+                    "(a{sv})",
+                )[0]
             except Exception:  # noqa: BLE001
                 return
             self.consider_device(path, props)
@@ -862,13 +1055,17 @@ class Daemon:
             self.state.reset()
             self.publish()
 
-    def on_interfaces_added(self, _conn, _sender, _path, _iface, _signal, params) -> None:
+    def on_interfaces_added(
+        self, _conn, _sender, _path, _iface, _signal, params
+    ) -> None:
         path, ifaces = params.unpack()
         dev = ifaces.get("org.bluez.Device1")
         if dev and dev.get("Connected"):
             self.consider_device(path, dev)
 
-    def on_bluez_owner_changed(self, _conn, _sender, _path, _iface, _signal, params) -> None:
+    def on_bluez_owner_changed(
+        self, _conn, _sender, _path, _iface, _signal, params
+    ) -> None:
         _name, _old, new = params.unpack()
         self.bluez_owner = new or None
         self.registered.clear()
@@ -886,13 +1083,17 @@ class Daemon:
     def reject_profile_call(self, invocation, message: str) -> None:
         invocation.return_dbus_error("org.bluez.Error.Rejected", message[:256])
 
-    def on_profile_call(self, _conn, sender, _path, _iface, method, params, invocation) -> None:
+    def on_profile_call(
+        self, _conn, sender, _path, _iface, method, params, invocation
+    ) -> None:
         # Profile1 is exported on the system bus. The passed Unix FD is a
         # capability, so authenticate the sender before unpacking parameters
         # or touching the FD list. BlueZ's well-known name is not enough:
         # another process may own it after a restart.
         if not sender or sender != self.bluez_owner:
-            self.reject_profile_call(invocation, "profile callback is not from the current BlueZ owner")
+            self.reject_profile_call(
+                invocation, "profile callback is not from the current BlueZ owner"
+            )
             return
 
         if method == "NewConnection":
@@ -914,7 +1115,9 @@ class Daemon:
                         os.close(fd)
                     except OSError:
                         pass
-                self.reject_profile_call(invocation, str(exc) or "invalid Bluetooth connection")
+                self.reject_profile_call(
+                    invocation, str(exc) or "invalid Bluetooth connection"
+                )
             except Exception as exc:  # noqa: BLE001
                 if fd is not None:
                     try:
@@ -932,7 +1135,9 @@ class Daemon:
                 self.drop_link()
                 self.publish()
             except (OSError, ValueError, RuntimeError) as exc:
-                self.reject_profile_call(invocation, str(exc) or "invalid disconnection")
+                self.reject_profile_call(
+                    invocation, str(exc) or "invalid disconnection"
+                )
             except Exception as exc:  # noqa: BLE001
                 self.log(f"omarchy-buds: rejected malformed disconnection call: {exc}")
                 self.reject_profile_call(invocation, "invalid disconnection")
@@ -942,8 +1147,13 @@ class Daemon:
     def on_new_connection(self, device: str, fd: int) -> None:
         if self.sock:
             raise RuntimeError("a Bluetooth control link is already active")
-        props = self.call(device, "org.freedesktop.DBus.Properties", "GetAll",
-                          self.GLib.Variant("(s)", ("org.bluez.Device1",)), "(a{sv})")[0]
+        props = self.call(
+            device,
+            "org.freedesktop.DBus.Properties",
+            "GetAll",
+            self.GLib.Variant("(s)", ("org.bluez.Device1",)),
+            "(a{sv})",
+        )[0]
         name, model = self.validate_device(device, props)
         if self.device_path and device != self.device_path:
             raise ValueError("link offered for a different device")
@@ -956,8 +1166,12 @@ class Daemon:
         self.state.model = model
         self.sock = sock
         self.parser = FrameParser()
-        self.sock_watch = self.GLib.io_add_watch(self.sock.fileno(), self.GLib.PRIORITY_DEFAULT,
-                                                 self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR, self.on_readable)
+        self.sock_watch = self.GLib.io_add_watch(
+            self.sock.fileno(),
+            self.GLib.PRIORITY_DEFAULT,
+            self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR,
+            self.on_readable,
+        )
         self.state.connected = True
         self.log(f"omarchy-buds: control link up with {self.state.name}")
         # Introduce ourselves the way the Samsung app does; the buds answer with
@@ -983,10 +1197,14 @@ class Daemon:
             duplicate = -1  # the probe socket owns it now
             try:
                 socket_type = probe.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
-                domain = probe.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_DOMAIN", 39))
+                domain = probe.getsockopt(
+                    socket.SOL_SOCKET, getattr(socket, "SO_DOMAIN", 39)
+                )
                 probe.getpeername()
             except OSError as exc:
-                raise ValueError("Profile1 descriptor is not a connected socket") from exc
+                raise ValueError(
+                    "Profile1 descriptor is not a connected socket"
+                ) from exc
             if socket_type != socket.SOCK_STREAM:
                 raise ValueError("Profile1 descriptor is not a stream socket")
             if domain != getattr(socket, "AF_BLUETOOTH", -1):
@@ -997,7 +1215,11 @@ class Daemon:
                 probe.close()
             elif duplicate >= 0:
                 os.close(duplicate)
-        return socket.socket(getattr(socket, "AF_BLUETOOTH", socket.AF_UNIX), socket.SOCK_STREAM, fileno=fd)
+        return socket.socket(
+            getattr(socket, "AF_BLUETOOTH", socket.AF_UNIX),
+            socket.SOCK_STREAM,
+            fileno=fd,
+        )
 
     def drop_link(self) -> None:
         if self.sock_watch:
@@ -1035,11 +1257,15 @@ class Daemon:
         changed = False
         for msg_id, payload, is_response in self.parser.feed(data):
             if self.debug:
-                self.log(f"<< id={msg_id} resp={int(is_response)} payload={payload.hex(' ')}")
+                self.log(
+                    f"<< id={msg_id} resp={int(is_response)} payload={payload.hex(' ')}"
+                )
             elif msg_id not in STREAM_IDS:
                 # Always on, ids and lengths only: a few lines a minute, and the
                 # evidence needed when the panel and the buds disagree.
-                self.log(f"omarchy-buds: << id={msg_id} resp={int(is_response)} len={len(payload)}")
+                self.log(
+                    f"omarchy-buds: << id={msg_id} resp={int(is_response)} len={len(payload)}"
+                )
             changed |= self.handle(msg_id, payload)
         skipped = self.parser.take_skipped()
         if skipped:
@@ -1113,7 +1339,10 @@ class Daemon:
         temp_fd = -1
         temp_name = None
         try:
-            data = json.dumps(self.state.to_json(), separators=(",", ":")).encode("utf-8") + b"\n"
+            data = (
+                json.dumps(self.state.to_json(), separators=(",", ":")).encode("utf-8")
+                + b"\n"
+            )
             if len(data) > MAX_STATUS_BYTES:
                 self.log(f"omarchy-buds: refusing oversized status ({len(data)} bytes)")
                 return
@@ -1128,13 +1357,20 @@ class Daemon:
                 except FileExistsError:
                     temp_name = None
             if temp_fd < 0 or temp_name is None:
-                raise OSError(errno.EEXIST, "could not create a private status temporary file")
+                raise OSError(
+                    errno.EEXIST, "could not create a private status temporary file"
+                )
             with os.fdopen(temp_fd, "wb") as fh:
                 temp_fd = -1
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(temp_name, "status.json", src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.replace(
+                temp_name,
+                "status.json",
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
             temp_name = None
             os.fsync(directory_fd)
         except (OSError, ValueError, TypeError) as exc:
@@ -1159,8 +1395,14 @@ class Daemon:
         except FileNotFoundError:
             existing = None
         if existing is not None:
-            if not stat.S_ISSOCK(existing.st_mode) or existing.st_uid != os.getuid() or stat.S_IMODE(existing.st_mode) & 0o077:
-                raise PermissionError(f"refusing to replace an unrelated control path: {path}")
+            if (
+                not stat.S_ISSOCK(existing.st_mode)
+                or existing.st_uid != os.getuid()
+                or stat.S_IMODE(existing.st_mode) & 0o077
+            ):
+                raise PermissionError(
+                    f"refusing to replace an unrelated control path: {path}"
+                )
             os.unlink(path)
         ensure_private_dir(runtime_dir())
         self.control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1168,7 +1410,12 @@ class Daemon:
         os.chmod(path, 0o600)
         self.control.listen(MAX_CONTROL_CLIENTS)
         self.control.setblocking(False)
-        self.GLib.io_add_watch(self.control.fileno(), self.GLib.PRIORITY_DEFAULT, self.GLib.IO_IN, self.on_control_readable)
+        self.GLib.io_add_watch(
+            self.control.fileno(),
+            self.GLib.PRIORITY_DEFAULT,
+            self.GLib.IO_IN,
+            self.on_control_readable,
+        )
 
     def on_control_readable(self, _fd, _cond) -> bool:
         while True:
@@ -1182,10 +1429,19 @@ class Daemon:
                 conn.close()
                 continue
             conn.setblocking(False)
-            client = {"sock": conn, "input": bytearray(), "output": bytearray(), "done": False, "watch": 0, "timer": 0}
+            client = {
+                "sock": conn,
+                "input": bytearray(),
+                "output": bytearray(),
+                "done": False,
+                "watch": 0,
+                "timer": 0,
+            }
             fd = conn.fileno()
             self.control_clients[fd] = client
-            client["timer"] = self.GLib.timeout_add(CONTROL_TIMEOUT_MS, self.on_control_timeout, fd)
+            client["timer"] = self.GLib.timeout_add(
+                CONTROL_TIMEOUT_MS, self.on_control_timeout, fd
+            )
             self.set_control_client_watch(fd)
         return True
 
@@ -1198,7 +1454,12 @@ class Daemon:
         events = self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR
         if client["output"]:
             events |= self.GLib.IO_OUT
-        client["watch"] = self.GLib.io_add_watch(client["sock"].fileno(), self.GLib.PRIORITY_DEFAULT, events, self.on_control_client)
+        client["watch"] = self.GLib.io_add_watch(
+            client["sock"].fileno(),
+            self.GLib.PRIORITY_DEFAULT,
+            events,
+            self.on_control_client,
+        )
 
     def close_control_client(self, fd: int) -> None:
         client = self.control_clients.pop(fd, None)
@@ -1237,7 +1498,9 @@ class Daemon:
         sock = client["sock"]
         while True:
             try:
-                chunk = sock.recv(min(4096, MAX_COMMAND_BYTES + 1 - len(client["input"])))
+                chunk = sock.recv(
+                    min(4096, MAX_COMMAND_BYTES + 1 - len(client["input"]))
+                )
             except BlockingIOError:
                 return
             except OSError:
@@ -1245,21 +1508,28 @@ class Daemon:
                 return
             if not chunk:
                 if client["input"]:
-                    self.control_reply(client, {"ok": False, "error": "incomplete command"})
+                    self.control_reply(
+                        client, {"ok": False, "error": "incomplete command"}
+                    )
                 else:
                     self.close_control_client(fd)
                 return
             client["input"].extend(chunk)
             newline = client["input"].find(b"\n")
             if newline >= 0:
-                trailing = client["input"][newline + 1:]
+                trailing = client["input"][newline + 1 :]
                 if trailing:
-                    self.control_reply(client, {"ok": False, "error": "multiple commands are not allowed"})
+                    self.control_reply(
+                        client,
+                        {"ok": False, "error": "multiple commands are not allowed"},
+                    )
                     return
                 try:
                     line = bytes(client["input"][:newline]).decode("utf-8")
                 except UnicodeDecodeError:
-                    self.control_reply(client, {"ok": False, "error": "command is not valid UTF-8"})
+                    self.control_reply(
+                        client, {"ok": False, "error": "command is not valid UTF-8"}
+                    )
                     return
                 try:
                     reply = self.command(line.strip().split())
@@ -1269,7 +1539,9 @@ class Daemon:
                 self.control_reply(client, reply)
                 return
             if len(client["input"]) >= MAX_COMMAND_BYTES:
-                self.control_reply(client, {"ok": False, "error": "command is too large"})
+                self.control_reply(
+                    client, {"ok": False, "error": "command is too large"}
+                )
                 return
 
     def write_control_client(self, fd: int) -> None:
@@ -1324,7 +1596,9 @@ class Daemon:
 
         def need(feature: str) -> None:
             if not s.supports(feature):
-                raise ValueError(f"{s.model['label']} does not support {feature.replace('_', ' ')}")
+                raise ValueError(
+                    f"{s.model['label']} does not support {feature.replace('_', ' ')}"
+                )
 
         def flag(value: str) -> bool:
             if value in ("on", "1", "true"):
@@ -1342,12 +1616,21 @@ class Daemon:
                     at = modes.index(s.noise_mode) if s.noise_mode in modes else -1
                     mode = modes[(at + 1) % len(modes)]
                 if mode not in s.available_noise_modes():
-                    raise ValueError(f"mode must be one of {', '.join(s.available_noise_modes())}")
+                    raise ValueError(
+                        f"mode must be one of {', '.join(s.available_noise_modes())}"
+                    )
                 self.send(Msg.NOISE_CONTROLS, bytes([NOISE_MODE_IDS[mode]]))
                 s.noise_mode = mode
             elif verb == "ambient-volume":
                 need("ambient_volume")
-                level = max(0, min(AMBIENT_VOLUME_MAX.get(s.model["family"], 2) + (1 if s.extra_high_ambient else 0), int(args[0])))
+                level = max(
+                    0,
+                    min(
+                        AMBIENT_VOLUME_MAX.get(s.model["family"], 2)
+                        + (1 if s.extra_high_ambient else 0),
+                        int(args[0]),
+                    ),
+                )
                 self.send(Msg.AMBIENT_VOLUME, bytes([level]))
                 s.ambient_volume = level
             elif verb == "conversation":
@@ -1387,7 +1670,9 @@ class Daemon:
                 elif preset in EQ_PRESETS:
                     self.send(Msg.EQUALIZER, bytes([EQ_PRESETS.index(preset) + 1]))
                 else:
-                    raise ValueError(f"preset must be one of off, {', '.join(EQ_PRESETS)}")
+                    raise ValueError(
+                        f"preset must be one of off, {', '.join(EQ_PRESETS)}"
+                    )
                 s.eq_preset = preset
             elif verb == "find":
                 need("find")
@@ -1396,7 +1681,9 @@ class Daemon:
                     action = "stop" if s.finding else "start"
                 if action == "start":
                     if s.wearing():
-                        raise ValueError("take the buds out of your ears before ringing them")
+                        raise ValueError(
+                            "take the buds out of your ears before ringing them"
+                        )
                     self.send(Msg.FIND_MY_EARBUDS_START)
                     s.finding = True
                 elif action == "stop":

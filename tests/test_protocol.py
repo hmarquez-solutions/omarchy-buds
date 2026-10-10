@@ -6,7 +6,6 @@ Run with:  python3 -m unittest discover -s tests
 import importlib.util
 import os
 import socket
-import sys
 import tempfile
 import unittest
 
@@ -29,12 +28,36 @@ ob = load_daemon()
 class Crc16Tests(unittest.TestCase):
     def test_known_frame_from_galaxybudsclient_checks_to_zero(self):
         # Sample documented in GalaxyBudsClient's Crc16.cs: id 0x61, payload, then CRC bytes 0x0F 0xF3.
-        body = bytes([0x61, 0x02, 0x00, 0x4B, 0x5F, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x00, 0x02, 0x00, 0x13])
+        body = bytes(
+            [
+                0x61,
+                0x02,
+                0x00,
+                0x4B,
+                0x5F,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x01,
+                0x05,
+                0x00,
+                0x02,
+                0x00,
+                0x13,
+            ]
+        )
         # The buds send the CRC little-endian; appended big-endian it leaves a zero remainder.
         self.assertEqual(ob.crc16(body + bytes([0xF3, 0x0F])), 0)
         self.assertEqual(ob.crc16(body), 0xF30F)
-        self.assertEqual(list(ob.FrameParser().feed(bytes([0xFD, 0x11, 0x00]) + body + bytes([0x0F, 0xF3, 0xDD]))),
-                         [(0x61, body[1:], False)])
+        self.assertEqual(
+            list(
+                ob.FrameParser().feed(
+                    bytes([0xFD, 0x11, 0x00]) + body + bytes([0x0F, 0xF3, 0xDD])
+                )
+            ),
+            [(0x61, body[1:], False)],
+        )
 
     def test_encode_roundtrips_through_parser(self):
         frame = ob.encode(ob.Msg.NOISE_CONTROLS, bytes([1]))
@@ -63,7 +86,9 @@ class FrameParserTests(unittest.TestCase):
         a = ob.encode(ob.Msg.STATUS_UPDATED, b"\x01")
         b = ob.encode(ob.Msg.AMBIENT_VOLUME, b"\x02")
         parsed = list(ob.FrameParser().feed(a + b))
-        self.assertEqual([p[0] for p in parsed], [ob.Msg.STATUS_UPDATED, ob.Msg.AMBIENT_VOLUME])
+        self.assertEqual(
+            [p[0] for p in parsed], [ob.Msg.STATUS_UPDATED, ob.Msg.AMBIENT_VOLUME]
+        )
 
     def test_bad_crc_is_skipped_not_raised(self):
         frame = bytearray(ob.encode(ob.Msg.STATUS_UPDATED, b"\x01\x02"))
@@ -80,7 +105,9 @@ class FrameParserTests(unittest.TestCase):
         parser = ob.FrameParser()
         self.assertEqual(list(parser.feed(garbage)), [])
         self.assertEqual(list(parser.feed(good[:4])), [])
-        self.assertEqual(list(parser.feed(good[4:])), [(ob.Msg.AMBIENT_VOLUME, b"\x02", False)])
+        self.assertEqual(
+            list(parser.feed(good[4:])), [(ob.Msg.AMBIENT_VOLUME, b"\x02", False)]
+        )
         self.assertEqual(parser.take_skipped(), len(garbage))
 
     def test_response_bit_is_reported(self):
@@ -98,14 +125,20 @@ class HeaderFlagTests(unittest.TestCase):
             header = int.from_bytes(frame[1:3], "little") | flags
             frame[1:3] = header.to_bytes(2, "little")
             out = list(ob.FrameParser().feed(bytes(frame)))
-            self.assertEqual([(m, len(p)) for m, p, _ in out], [(ob.Msg.STATUS_UPDATED, 8)], hex(flags))
+            self.assertEqual(
+                [(m, len(p)) for m, p, _ in out],
+                [(ob.Msg.STATUS_UPDATED, 8)],
+                hex(flags),
+            )
 
     def test_response_bit_survives_alongside_sequence_bits(self):
         frame = bytearray(ob.encode(ob.Msg.MANAGER_INFO, b"\x00", 0x1000))
         header = int.from_bytes(frame[1:3], "little") | 0xC000
         frame[1:3] = header.to_bytes(2, "little")
-        (msg_id, payload, is_response), = ob.FrameParser().feed(bytes(frame))
-        self.assertEqual((msg_id, payload, is_response), (ob.Msg.MANAGER_INFO, b"\x00", True))
+        ((msg_id, payload, is_response),) = ob.FrameParser().feed(bytes(frame))
+        self.assertEqual(
+            (msg_id, payload, is_response), (ob.Msg.MANAGER_INFO, b"\x00", True)
+        )
 
 
 class IdentifyTests(unittest.TestCase):
@@ -144,7 +177,12 @@ class BoundaryTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_runtime_socket_is_in_a_private_subdirectory(self):
-        self.assertEqual(ob.socket_path(), os.path.join(self.temp.name, "runtime", "omarchy-buds", "omarchy-buds.sock"))
+        self.assertEqual(
+            ob.socket_path(),
+            os.path.join(
+                self.temp.name, "runtime", "omarchy-buds", "omarchy-buds.sock"
+            ),
+        )
 
     def test_publish_replaces_status_symlink_without_following_it(self):
         os.makedirs(ob.state_dir(), mode=0o700)
@@ -222,25 +260,27 @@ class BoundaryTests(unittest.TestCase):
 
         self.daemon.bluez_owner = ":1.42"
         invocation = Invocation()
-        self.daemon.on_profile_call(None, ":1.99", None, None, "NewConnection", Params(), invocation)
+        self.daemon.on_profile_call(
+            None, ":1.99", None, None, "NewConnection", Params(), invocation
+        )
         self.assertEqual(invocation.error[0], "org.bluez.Error.Rejected")
 
 
 def buds3_extended_payload(**overrides):
     """A plausible EXTENDED_STATUS_UPDATED payload for the Buds3 family."""
     p = bytearray(57)
-    p[0] = 1            # revision
+    p[0] = 1  # revision
     p[2], p[3] = 87, 91  # battery L, R
-    p[4] = 1            # coupled
-    p[6] = 0x11         # both wearing
-    p[7] = 64           # case
-    p[9] = 2            # eq: soft
-    p[10] = 0x8F        # touch unlocked, single/double/triple/hold on
-    p[12] = 1           # anc
-    p[23] = 1           # ambient volume
-    p[26] = 1           # detect conversations
-    p[28] = 1           # noise controls with one earbud
-    p[42] = 0x00        # nothing charging
+    p[4] = 1  # coupled
+    p[6] = 0x11  # both wearing
+    p[7] = 64  # case
+    p[9] = 2  # eq: soft
+    p[10] = 0x8F  # touch unlocked, single/double/triple/hold on
+    p[12] = 1  # anc
+    p[23] = 1  # ambient volume
+    p[26] = 1  # detect conversations
+    p[28] = 1  # noise controls with one earbud
+    p[42] = 0x00  # nothing charging
     for k, v in overrides.items():
         p[int(k)] = v
     return bytes(p)
@@ -256,7 +296,9 @@ class DecoderTests(unittest.TestCase):
         s = self.state_for("Buds4 Pro")
         s.apply_extended_status(buds3_extended_payload())
         # Both buds worn, so the case byte (64) is not a live reading.
-        self.assertEqual((s.left["level"], s.right["level"], s.case["level"]), (87, 91, None))
+        self.assertEqual(
+            (s.left["level"], s.right["level"], s.case["level"]), (87, 91, None)
+        )
         self.assertEqual(s.left["placement"], "wearing")
         self.assertEqual(s.noise_mode, "anc")
         self.assertEqual(s.ambient_volume, 1)
@@ -264,12 +306,16 @@ class DecoderTests(unittest.TestCase):
         self.assertFalse(s.touch_locked)
         self.assertTrue(s.conversation_detect)
         self.assertTrue(s.one_bud_anc)
-        self.assertEqual(s.available_noise_modes(), ["off", "anc", "ambient", "adaptive"])
+        self.assertEqual(
+            s.available_noise_modes(), ["off", "anc", "ambient", "adaptive"]
+        )
 
     def test_charging_bits_and_case_placement(self):
         s = self.state_for("Buds4 Pro")
         s.apply_extended_status(buds3_extended_payload(**{"6": 0x33, "42": 0x15}))
-        self.assertTrue(s.left["charging"] and s.right["charging"] and s.case["charging"])
+        self.assertTrue(
+            s.left["charging"] and s.right["charging"] and s.case["charging"]
+        )
         self.assertEqual(s.left["placement"], "case")
 
     def test_case_level_unknown_unless_a_bud_is_docked(self):
@@ -299,7 +345,9 @@ class DecoderTests(unittest.TestCase):
         # Docking announced by this frame: no case byte, and none read yet -> unknown,
         # not the meaningless 0/64 seen while both buds were out.
         s.apply_noise_update(bytes.fromhex("02 31 01 00 09 09 02 02 02 02 02"))
-        self.assertEqual((s.left["placement"], s.right["placement"]), ("case", "wearing"))
+        self.assertEqual(
+            (s.left["placement"], s.right["placement"]), ("case", "wearing")
+        )
         self.assertIsNone(s.case["level"])
         # A status frame while docked is a live reading; a later 119 docking reuses it.
         s.apply_status(bytes([1, 100, 99, 1, 0, 0x31, 77, 0x00]))
@@ -314,7 +362,9 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual((s.left["placement"], s.right["placement"]), ("idle", "idle"))
         self.assertIsNone(s.case["level"])
         # Leaving the case via this frame clears the charging flag it cannot carry.
-        s.apply_extended_status(buds3_extended_payload(**{"6": 0x13, "7": 80, "42": 0x05}))
+        s.apply_extended_status(
+            buds3_extended_payload(**{"6": 0x13, "7": 80, "42": 0x05})
+        )
         self.assertTrue(s.right["charging"] and s.case["charging"])
         self.assertEqual((s.right["placement"], s.case["level"]), ("case", 80))
         s.apply_noise_update(bytes.fromhex("02 11 01 00 09 09 02 02 02 02 02"))
@@ -353,9 +403,13 @@ class DecoderTests(unittest.TestCase):
     def test_short_status_heartbeat(self):
         s = self.state_for("Buds4 Pro")
         s.apply_status(bytes([1, 50, 60, 1, 0, 0x12, 70, 0x04]))
-        self.assertEqual((s.left["level"], s.right["level"], s.case["level"]), (50, 60, 70))
+        self.assertEqual(
+            (s.left["level"], s.right["level"], s.case["level"]), (50, 60, 70)
+        )
         # Right reports idle with its charging bit set: it is in the case.
-        self.assertEqual((s.left["placement"], s.right["placement"]), ("wearing", "case"))
+        self.assertEqual(
+            (s.left["placement"], s.right["placement"]), ("wearing", "case")
+        )
         self.assertTrue(s.right["charging"])
 
     def test_ack_updates_eq_but_is_only_a_receipt_for_noise(self):

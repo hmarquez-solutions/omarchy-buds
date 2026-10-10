@@ -23,10 +23,16 @@ from test_protocol import ob
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = sorted(glob.glob(os.path.join(HERE, "fixtures", "*.log")))
-FRAME = re.compile(r"^(?:\d\d:\d\d:\d\d\.\d+ )?(<<|>>) id=(\d+) (?:resp=(\d)|flags=\S+) payload=(.*)$")
+FRAME = re.compile(
+    r"^(?:\d\d:\d\d:\d\d\.\d+ )?(<<|>>) id=(\d+) (?:resp=(\d)|flags=\S+) payload=(.*)$"
+)
 LINK = re.compile(r"^(?:\d\d:\d\d:\d\d\.\d+ )?link (up|closed)$")
 DOCKED = ("case", "case_closed")
-PUBLISHING_IDS = {ob.Msg.STATUS_UPDATED, ob.Msg.EXTENDED_STATUS_UPDATED, ob.Msg.NOISE_CONTROLS_UPDATE}
+PUBLISHING_IDS = {
+    ob.Msg.STATUS_UPDATED,
+    ob.Msg.EXTENDED_STATUS_UPDATED,
+    ob.Msg.NOISE_CONTROLS_UPDATE,
+}
 
 
 def events(path):
@@ -45,7 +51,12 @@ def events(path):
                 raise ValueError(f"{path}: unparsable line {line!r}")
             direction, msg_id, resp, hexes = m.groups()
             payload = bytes.fromhex(hexes.replace(" ", "")) if hexes.strip() else b""
-            yield ("rx" if direction == "<<" else "tx", int(msg_id), payload, resp == "1")
+            yield (
+                "rx" if direction == "<<" else "tx",
+                int(msg_id),
+                payload,
+                resp == "1",
+            )
 
 
 class Replay:
@@ -90,7 +101,9 @@ class Replay:
 
 
 def docked(state):
-    return any(b["placement"] in DOCKED or b["charging"] for b in (state.left, state.right))
+    return any(
+        b["placement"] in DOCKED or b["charging"] for b in (state.left, state.right)
+    )
 
 
 class ReplayInvariantTests(unittest.TestCase):
@@ -104,12 +117,18 @@ class ReplayInvariantTests(unittest.TestCase):
                 self.assertIsNone(bud["level"], where)
             # A bud out of the case is not charging, whatever a stale flag said.
             if bud["charging"]:
-                self.assertIn(bud["placement"], DOCKED, f"{where}: charging {side} bud not in case")
+                self.assertIn(
+                    bud["placement"],
+                    DOCKED,
+                    f"{where}: charging {side} bud not in case",
+                )
         if docked(state):
             if state.case["level"] is not None:
                 self.assertTrue(0 <= state.case["level"] <= 100, where)
         else:
-            self.assertIsNone(state.case["level"], f"{where}: case level with nothing docked")
+            self.assertIsNone(
+                state.case["level"], f"{where}: case level with nothing docked"
+            )
         self.assertIn(state.noise_mode, list(ob.NOISE_MODES.values()) + [None], where)
         doc = json.dumps(state.to_json())
         self.assertLessEqual(len(doc), ob.MAX_STATUS_BYTES, where)
@@ -137,14 +156,20 @@ class ReplayInvariantTests(unittest.TestCase):
     def test_captured_frames_survive_encoding_and_fragmented_parsing(self):
         rng = random.Random(1)
         for path in FIXTURES:
-            frames = [(ev[1], ev[2], 0x1000 if ev[3] else 0) for ev in events(path) if ev[0] == "rx"]
-            stream = b"".join(ob.encode(msg_id, payload, flags) for msg_id, payload, flags in frames)
+            frames = [
+                (ev[1], ev[2], 0x1000 if ev[3] else 0)
+                for ev in events(path)
+                if ev[0] == "rx"
+            ]
+            stream = b"".join(
+                ob.encode(msg_id, payload, flags) for msg_id, payload, flags in frames
+            )
             parser = ob.FrameParser()
             out = []
             i = 0
             while i < len(stream):
                 n = rng.randint(1, 40)
-                out.extend(parser.feed(stream[i:i + n]))
+                out.extend(parser.feed(stream[i : i + n]))
                 i += n
             self.assertEqual([(m, p, bool(f)) for m, p, f in frames], out, path)
             self.assertEqual(parser.take_skipped(), 0, path)
@@ -152,7 +177,9 @@ class ReplayInvariantTests(unittest.TestCase):
 
 def raw_fixture():
     with open(os.path.join(HERE, "fixtures", "buds4pro-raw-1.hex")) as fh:
-        return bytes.fromhex("".join(line.strip() for line in fh if not line.startswith("#")))
+        return bytes.fromhex(
+            "".join(line.strip() for line in fh if not line.startswith("#"))
+        )
 
 
 class RawStreamTests(unittest.TestCase):
@@ -169,7 +196,7 @@ class RawStreamTests(unittest.TestCase):
             i = 0
             while i < len(raw):
                 n = rng.randint(1, chunk)
-                out.extend(parser.feed(raw[i:i + n]))
+                out.extend(parser.feed(raw[i : i + n]))
                 i += n
         return out, parser.take_skipped()
 
@@ -189,7 +216,7 @@ class RawStreamTests(unittest.TestCase):
         seq = []
         i = 0
         while i < len(raw):
-            header = int.from_bytes(raw[i + 1:i + 3], "little")
+            header = int.from_bytes(raw[i + 1 : i + 3], "little")
             seq.append(header >> 14)
             i += 3 + (header & 0x3FF) + 1
         self.assertEqual(sorted(set(seq)), [0, 1, 2, 3])
@@ -304,7 +331,9 @@ class ReplayCheckpointTests(unittest.TestCase):
             if ev == ("link", "closed"):
                 saw_closed = True
                 self.assertFalse(replay.state.connected)
-            elif saw_closed and ev[0] == "rx" and ev[1] == ob.Msg.EXTENDED_STATUS_UPDATED:
+            elif (
+                saw_closed and ev[0] == "rx" and ev[1] == ob.Msg.EXTENDED_STATUS_UPDATED
+            ):
                 saw_reopen = True
                 self.assertTrue(replay.state.connected)
                 self.assertIn(replay.state.left["placement"], ob.PLACEMENTS.values())
