@@ -30,3 +30,38 @@ jobs:
 
       - name: Python unit tests
         run: python3 -m unittest discover -s tests
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: python3 -m pip install ruff==0.17.0
+
+      - name: ruff check
+        run: ruff check --output-format=github
+
+      - name: ruff format --check
+        run: ruff format --check --diff
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # No package.json/ESLint here, so this is a syntax check only. The
+      # QML-only `.pragma` / `.import` directives are blanked out first (line
+      # numbers are kept) because they are not plain JavaScript.
+      - name: JS syntax check
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            sed -E 's/^[[:space:]]*\.(pragma|import)([[:space:]].*)?$//' "$f" \
+              | node --check - 2> >(sed "s|\[stdin\]|$f|" >&2) || { echo "::error file=$f::node --check failed"; status=1; }
+          done < <(git ls-files -z '*.js' '*.mjs')
+          exit $status

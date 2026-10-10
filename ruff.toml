@@ -1,0 +1,4 @@
+# Ruff defaults, targeting the Python the daemon and CI run on.
+target-version = "py312"
+# The daemon is a Python script without a .py extension.
+extend-include = ["daemon/omarchy-buds"]
